@@ -1,0 +1,6 @@
+{
+  "name": "NEXUS OS",
+  "description": "Omar's local-first, bilingual Arabic/English personal intelligence operating system PWA.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

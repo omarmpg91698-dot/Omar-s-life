@@ -1,0 +1,140 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-fg: var(--accent-fg);
+}
+
+@layer base {
+  :root {
+    --font-sans: "IBM Plex Sans Arabic", "Plus Jakarta Sans", system-ui, sans-serif;
+    --font-brand: "Plus Jakarta Sans", "IBM Plex Sans Arabic", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    /* Default Accent: Teal */
+    --accent: #0d9488;
+    --accent-hover: #0f766e;
+    --accent-soft: #ccfbf1;
+    --accent-fg: #0f766e;
+    accent-color: var(--accent);
+  }
+
+  /* Teal (Default) */
+  html[data-accent="teal"] {
+    --accent: #0d9488;
+    --accent-hover: #0f766e;
+    --accent-soft: #ccfbf1;
+    --accent-fg: #0f766e;
+  }
+
+  /* Blue */
+  html[data-accent="blue"] {
+    --accent: #2563eb;
+    --accent-hover: #1d4ed8;
+    --accent-soft: #dbeafe;
+    --accent-fg: #1d4ed8;
+  }
+
+  /* Indigo */
+  html[data-accent="indigo"] {
+    --accent: #4f46e5;
+    --accent-hover: #4338ca;
+    --accent-soft: #e0e7ff;
+    --accent-fg: #4338ca;
+  }
+
+  /* Emerald */
+  html[data-accent="emerald"] {
+    --accent: #059669;
+    --accent-hover: #047857;
+    --accent-soft: #d1fae5;
+    --accent-fg: #047857;
+  }
+
+  /* Violet */
+  html[data-accent="violet"] {
+    --accent: #7c3aed;
+    --accent-hover: #6d28d9;
+    --accent-soft: #ede9fe;
+    --accent-fg: #6d28d9;
+  }
+
+  /* Dark Mode Optical Compensation for Accent Foreground & Soft Surfaces */
+  html.dark[data-accent="teal"],
+  html.dark {
+    --accent-soft: rgba(13, 148, 136, 0.2);
+    --accent-fg: #5eead4;
+  }
+
+  html.dark[data-accent="blue"] {
+    --accent-soft: rgba(37, 99, 235, 0.22);
+    --accent-fg: #93c5fd;
+  }
+
+  html.dark[data-accent="indigo"] {
+    --accent-soft: rgba(79, 70, 229, 0.24);
+    --accent-fg: #a5b4fc;
+  }
+
+  html.dark[data-accent="emerald"] {
+    --accent-soft: rgba(5, 150, 105, 0.22);
+    --accent-fg: #6ee7b7;
+  }
+
+  html.dark[data-accent="violet"] {
+    --accent-soft: rgba(124, 58, 237, 0.24);
+    --accent-fg: #c4b5fd;
+  }
+
+  html {
+    font-family: var(--font-sans);
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    overflow-x: hidden;
+  }
+
+  ::selection {
+    background-color: var(--accent-soft);
+    color: var(--accent-fg);
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.font-brand {
+  font-family: var(--font-brand);
+}
+
+/* Primary accent button hover transition */
+button.bg-accent:hover,
+a.bg-accent:hover {
+  background-color: var(--accent-hover);
+}
+
+/* High-contrast accent foreground text in light & dark modes */
+.text-accent {
+  color: var(--accent-fg);
+}
+
+.hover\:text-accent:hover {
+  color: var(--accent-fg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}

@@ -1,0 +1,198 @@
+package com.omar.lifeapp
+
+import android.annotation.SuppressLint
+import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
+import android.view.View
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowCompat
+import androidx.webkit.WebViewAssetLoader
+import java.io.ByteArrayInputStream
+
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var webView: WebView
+    private var filePathCallback: ValueCallback<Array<Uri>>? = null
+
+    private val fileChooserLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val callback = filePathCallback ?: return@registerForActivityResult
+            filePathCallback = null
+            val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+            callback.onReceiveValue(uris)
+        }
+
+    private val assetLoader: WebViewAssetLoader by lazy {
+        WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .build()
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        WindowCompat.setDecorFitsSystemWindows(window, true)
+        window.decorView.layoutDirection = View.LAYOUT_DIRECTION_RTL
+
+        webView = WebView(this).apply {
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            overScrollMode = View.OVER_SCROLL_NEVER
+
+            settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                databaseEnabled = true
+                allowFileAccess = false
+                allowContentAccess = true
+                mediaPlaybackRequiresUserGesture = false
+                mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                setSupportZoom(false)
+                builtInZoomControls = false
+                displayZoomControls = false
+            }
+
+            webViewClient = object : WebViewClient() {
+                override fun shouldInterceptRequest(
+                    view: WebView,
+                    request: WebResourceRequest
+                ): WebResourceResponse? {
+                    val uri = request.url
+                    if (uri.host != APP_ASSETS_HOST) {
+                        return null
+                    }
+
+                    val path = uri.path.orEmpty()
+                    if (path == "/assets/www/index.html" || path == "/" || path == "/index.html") {
+                        return loadPatchedIndexHtml()
+                    }
+
+                    val directResponse = assetLoader.shouldInterceptRequest(uri)
+                    if (directResponse != null) {
+                        return directResponse
+                    }
+
+                    // Support root-relative Vite asset paths (e.g. /assets/index.js, /icon.svg)
+                    val normalizedPath = path.trimStart('/')
+                    if (normalizedPath.isNotEmpty() && !normalizedPath.startsWith("assets/www/")) {
+                        val remappedUri = Uri.parse(
+                            "https://$APP_ASSETS_HOST/assets/www/$normalizedPath"
+                        )
+                        return assetLoader.shouldInterceptRequest(remappedUri)
+                    }
+
+                    return null
+                }
+
+                override fun shouldOverrideUrlLoading(
+                    view: WebView,
+                    request: WebResourceRequest
+                ): Boolean {
+                    val url = request.url
+                    if (url.host == APP_ASSETS_HOST) {
+                        return false
+                    }
+                    return try {
+                        startActivity(Intent(Intent.ACTION_VIEW, url))
+                        true
+                    } catch (_: Exception) {
+                        false
+                    }
+                }
+            }
+
+            webChromeClient = object : WebChromeClient() {
+                override fun onShowFileChooser(
+                    webView: WebView,
+                    filePathCallback: ValueCallback<Array<Uri>>,
+                    fileChooserParams: FileChooserParams
+                ): Boolean {
+                    this@MainActivity.filePathCallback?.onReceiveValue(null)
+                    this@MainActivity.filePathCallback = filePathCallback
+                    return try {
+                        fileChooserLauncher.launch(fileChooserParams.createIntent())
+                        true
+                    } catch (_: Exception) {
+                        this@MainActivity.filePathCallback = null
+                        false
+                    }
+                }
+            }
+        }
+
+        setContentView(webView)
+
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    if (webView.canGoBack()) {
+                        webView.goBack()
+                    } else {
+                        isEnabled = false
+                        onBackPressedDispatcher.onBackPressed()
+                    }
+                }
+            }
+        )
+
+        if (savedInstanceState != null) {
+            webView.restoreState(savedInstanceState)
+        } else {
+            webView.loadUrl(START_URL)
+        }
+    }
+
+    private fun loadPatchedIndexHtml(): WebResourceResponse? {
+        return try {
+            val rawHtml = assets.open("www/index.html").bufferedReader(Charsets.UTF_8).use {
+                it.readText()
+            }
+            // Ensure Omar's Life organizer opens directly on first launch without touching web code
+            val bootstrapScript =
+                "<script>try{if(!window.localStorage.getItem('omar_workspace_mode_v1')){" +
+                    "window.localStorage.setItem('omar_workspace_mode_v1','life');" +
+                    "}}catch(e){}</script>"
+            val patchedHtml = if (rawHtml.contains("<head>", ignoreCase = true)) {
+                rawHtml.replaceFirst("<head>", "<head>$bootstrapScript", ignoreCase = true)
+            } else {
+                bootstrapScript + rawHtml
+            }
+            WebResourceResponse(
+                "text/html",
+                "UTF-8",
+                ByteArrayInputStream(patchedHtml.toByteArray(Charsets.UTF_8))
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        webView.saveState(outState)
+    }
+
+    override fun onDestroy() {
+        filePathCallback?.onReceiveValue(null)
+        filePathCallback = null
+        webView.destroy()
+        super.onDestroy()
+    }
+
+    companion object {
+        private const val APP_ASSETS_HOST = "appassets.androidplatform.net"
+        private const val START_URL =
+            "https://appassets.androidplatform.net/assets/www/index.html"
+    }
+}

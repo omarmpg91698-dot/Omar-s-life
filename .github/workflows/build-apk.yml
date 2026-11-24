@@ -8,6 +8,8 @@ on:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout project
         uses: actions/checkout@v4
@@ -20,12 +22,24 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
 
       - name: Build Debug APK
+        working-directory: android-omar-ai
         run: gradle assembleDebug --no-daemon
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: Omars-personal-assistant-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: android-omar-ai/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Create GitHub Release with APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "Omar's Personal Assistant (Build #${{ github.run_number }})"
+          body: "Automatic debug APK build from commit ${{ github.sha }}."
+          files: android-omar-ai/app/build/outputs/apk/debug/app-debug.apk
+          make_latest: true

@@ -70,6 +70,7 @@ function computeStoreDigest(store: OmarsLifeStore): string {
   return JSON.stringify({
     t: store.tasks.map((x) => [x.id, x.updatedAt, x.status]),
     n: store.notes.map((x) => [x.id, x.updatedAt, x.images.length]),
+    d: (store.documents ?? []).map((x) => [x.id, x.updatedAt, x.expiryDate, x.reminderLead]),
     g: store.goals.map((x) => [x.id, x.updatedAt, x.progress]),
     p: store.preferences,
   });

@@ -11,6 +11,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import {FilterDropdown, type FilterDropdownOption} from '../components/FilterDropdown';
 import {useLife} from '../context/LifeContext';
 import {normalizeSearchText} from '../storage/globalSearch';
 import {formatFriendlyDate} from '../storage/localStore';
@@ -81,15 +82,43 @@ export const ArchiveView: React.FC = () => {
     return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
   }, [archivedTasks]);
 
+  const archiveUntaggedCount = useMemo(
+    () => archivedTasks.filter((t) => (t.tags ?? []).length === 0).length,
+    [archivedTasks],
+  );
+
   const effectiveTag =
-    selectedTag === 'الكل' || archiveTags.some(([tag]) => tag === selectedTag)
+    selectedTag === 'الكل' ||
+    selectedTag === 'من غير تصنيف' ||
+    archiveTags.some(([tag]) => tag === selectedTag)
       ? selectedTag
       : 'الكل';
+
+  const archiveFilterOptions: FilterDropdownOption[] = useMemo(() => {
+    const opts: FilterDropdownOption[] = [
+      {value: 'الكل', label: 'الكل', count: archivedTasks.length},
+      ...archiveTags.map(([tag, count]) => ({
+        value: tag,
+        label: tag,
+        count,
+      })),
+    ];
+    if (archiveUntaggedCount > 0 || effectiveTag === 'من غير تصنيف') {
+      opts.push({
+        value: 'من غير تصنيف',
+        label: 'من غير تصنيف',
+        count: archiveUntaggedCount,
+      });
+    }
+    return opts;
+  }, [archivedTasks.length, archiveTags, archiveUntaggedCount, effectiveTag]);
 
   const filteredTasks = useMemo(() => {
     const normQuery = normalizeSearchText(searchQuery);
     const list = archivedTasks.filter((task) => {
-      if (effectiveTag !== 'الكل' && !(task.tags ?? []).includes(effectiveTag)) {
+      if (effectiveTag === 'من غير تصنيف') {
+        if ((task.tags ?? []).length > 0) return false;
+      } else if (effectiveTag !== 'الكل' && !(task.tags ?? []).includes(effectiveTag)) {
         return false;
       }
       if (!normQuery) return true;
@@ -264,9 +293,9 @@ export const ArchiveView: React.FC = () => {
         </div>
       </section>
 
-      {/* Search, Tag Filter & Sort Controls */}
+      {/* Search, Compact Archive Filter Dropdown & Sort Controls */}
       {archivedTasks.length > 0 && (
-        <div className="space-y-3 rounded-2xl border border-slate-200/80 bg-white p-3.5 dark:border-slate-800 dark:bg-slate-800/90">
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-3.5 dark:border-slate-800 dark:bg-slate-800/90">
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative min-w-[200px] flex-1">
               <Search className="pointer-events-none absolute top-1/2 start-3 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
@@ -275,55 +304,30 @@ export const ArchiveView: React.FC = () => {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="دوّر في المهام المؤرشفة أو التصنيفات..."
-                className="min-h-[40px] w-full rounded-xl border border-slate-200 bg-slate-50 ps-8 pe-3 text-xs text-slate-900 outline-none focus:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                className="min-h-[38px] w-full rounded-xl border border-slate-200 bg-slate-50 ps-8 pe-3 text-xs text-slate-900 outline-none focus:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
               />
             </div>
+
+            <FilterDropdown
+              label="العرض"
+              value={effectiveTag}
+              options={archiveFilterOptions}
+              onChange={setSelectedTag}
+              icon={<Tag className="h-3.5 w-3.5 text-accent" />}
+              ariaLabel="فلتر عرض الأرشيف"
+            />
 
             <select
               value={sortOrder}
               onChange={(e) => setSortOrder(e.target.value as ArchiveSortOrder)}
               aria-label="ترتيب المهام المؤرشفة"
-              className="min-h-[40px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-700 outline-none focus:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              className="min-h-[38px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-700 outline-none focus:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
             >
               <option value="archived_desc">الأحدث أرشفة</option>
               <option value="archived_asc">الأقدم أرشفة</option>
               <option value="completed_desc">الأحدث إنجازاً</option>
             </select>
           </div>
-
-          {archiveTags.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-100 pt-2.5 dark:border-slate-700">
-              <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 dark:text-slate-400">
-                <Tag className="h-3.5 w-3.5 text-accent" />
-                <span>التصنيف:</span>
-              </span>
-              <button
-                type="button"
-                onClick={() => setSelectedTag('الكل')}
-                className={`min-h-[32px] whitespace-nowrap rounded-lg border px-2.5 text-xs font-medium transition-colors ${
-                  effectiveTag === 'الكل'
-                    ? 'border-slate-900 bg-slate-900 text-white dark:border-slate-100 dark:bg-slate-100 dark:text-slate-900'
-                    : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
-                }`}
-              >
-                الكل ({archivedTasks.length})
-              </button>
-              {archiveTags.map(([tag, count]) => (
-                <button
-                  key={tag}
-                  type="button"
-                  onClick={() => setSelectedTag((prev) => (prev === tag ? 'الكل' : tag))}
-                  className={`min-h-[32px] whitespace-nowrap rounded-lg border px-2.5 text-xs font-medium transition-colors ${
-                    effectiveTag === tag
-                      ? 'border-accent bg-accent text-white'
-                      : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
-                  }`}
-                >
-                  #{tag} ({count})
-                </button>
-              ))}
-            </div>
-          )}
         </div>
       )}
 

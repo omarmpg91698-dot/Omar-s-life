@@ -28,7 +28,40 @@ import {
   isTaskArchived,
 } from '../src/storage/taskArchive.ts';
 import {computeWeeklyTaskStats} from '../src/storage/weeklyAnalytics.ts';
-import type {TaskItem} from '../src/types.ts';
+import {
+  buildArabicMonthGrid,
+  computeCalendarMonthStats,
+  computeGoalLinkedProgress,
+  computeHabitStreak,
+  computeNextRecurrenceDate,
+  hashLocalPin,
+  verifyLocalPin,
+} from '../src/storage/productivityUtils.ts';
+import {
+  getGoalStatusLabel,
+  getTargetDateCountdown,
+  resolveGoalPalette,
+} from '../src/storage/goalTheme.ts';
+import {buildLifeContextSnapshot} from '../src/storage/assistantContext.ts';
+import {
+  computeNextReminderTrigger,
+  formatReminderRecurrenceArabic,
+  formatTimeArabic12,
+  inferReminderFieldsFromText,
+  normalizeReminderRecurrence,
+} from '../src/storage/reminderSchedule.ts';
+import {
+  detectSpecialistIntent,
+  getRelevantStudiesContext,
+  PSYCHOLOGY_MARKETING_STUDIES,
+} from '../src/storage/psychologyMarketingKb.ts';
+import {getScoreTone, normalizeAdAuditResult} from '../src/storage/adAuditTypes.ts';
+import {
+  evaluateWeeklyDriveBackupReminder,
+  getDocumentExpiryInfo,
+  SEVEN_DAYS_MS,
+} from '../src/storage/documentsAndReminders.ts';
+import type {DocumentItem, TaskItem} from '../src/types.ts';
 
 function makeTask(overrides: Partial<TaskItem>): TaskItem {
   return {
@@ -620,12 +653,564 @@ test('autoArchiveExpiredTasks archives completed tasks older than 30 days and pr
   assert.equal(parsed.preferences.autoArchiveDays, 30);
 });
 
+test('computeNextRecurrenceDate handles daily, weekly, and month-end clamping', () => {
+  assert.equal(computeNextRecurrenceDate('2026-11-23', 'none', '2026-11-23'), null);
+  assert.equal(computeNextRecurrenceDate('2026-11-23', 'daily', '2026-11-23'), '2026-11-24');
+  assert.equal(computeNextRecurrenceDate('2026-11-23', 'weekly', '2026-11-23'), '2026-11-30');
+  // Month-end clamping: Jan 31 -> Feb 28 (non-leap year 2026)
+  assert.equal(computeNextRecurrenceDate('2026-01-31', 'monthly', '2026-01-31'), '2026-02-28');
+  // Overdue recurring task schedules relative to today rather than the stale past date
+  assert.equal(computeNextRecurrenceDate('2026-11-01', 'daily', '2026-11-23'), '2026-11-24');
+});
 
+test('computeGoalLinkedProgress calculates auto-progress from linked tasks', () => {
+  const tasks: TaskItem[] = [
+    makeTask({id: 'g-t1', goalId: 'goal-1', status: 'خلصت'}),
+    makeTask({id: 'g-t2', goalId: 'goal-1', status: 'خلصت'}),
+    makeTask({id: 'g-t3', goalId: 'goal-1', status: 'لسه'}),
+    makeTask({id: 'other', goalId: null, status: 'خلصت'}),
+  ];
 
+  const linked = computeGoalLinkedProgress('goal-1', tasks);
+  assert.equal(linked.linkedCount, 3);
+  assert.equal(linked.doneCount, 2);
+  assert.equal(linked.percent, 67);
 
+  const unlinked = computeGoalLinkedProgress('goal-empty', tasks);
+  assert.equal(unlinked.linkedCount, 0);
+  assert.equal(unlinked.percent, null);
+});
 
+test('computeHabitStreak computes current streak, best streak, and 7-day strip', () => {
+  const today = '2026-11-23';
+  const summary = computeHabitStreak(
+    {
+      completedDates: [
+        '2026-11-10',
+        '2026-11-11',
+        '2026-11-12',
+        '2026-11-13',
+        '2026-11-21',
+        '2026-11-22',
+        '2026-11-23',
+      ],
+    },
+    today,
+  );
 
+  assert.equal(summary.doneToday, true);
+  assert.equal(summary.currentStreak, 3);
+  assert.equal(summary.bestStreak, 4);
+  assert.equal(summary.last7Days.length, 7);
+  assert.equal(summary.last7Days[6].dateIso, today);
+  assert.equal(summary.last7Days[6].done, true);
+});
 
+test('buildArabicMonthGrid builds Saturday-first month grid with 35 or 42 cells', () => {
+  // November 2026 starts on Sunday (Nov 1, 2026) -> Saturday cell is Oct 31, 2026
+  const cells = buildArabicMonthGrid(2026, 11);
+  assert.equal(cells.length, 35);
+  assert.equal(cells[0].dateIso, '2026-10-31');
+  assert.equal(cells[0].inCurrentMonth, false);
+  assert.equal(cells[1].dateIso, '2026-11-01');
+  assert.equal(cells[1].inCurrentMonth, true);
+});
+
+test('hashLocalPin and verifyLocalPin validate 4-digit PINs without storing plaintext', () => {
+  const hash = hashLocalPin('2580');
+  assert.equal(hash.includes('2580'), false);
+  assert.equal(verifyLocalPin('2580', hash), true);
+  assert.equal(verifyLocalPin('1234', hash), false);
+});
+
+test('parseAndValidateBackup and mergeOmarsLifeStores preserve recurring tasks, subtasks, habits, focus sessions, pinned notes, and PIN lock', () => {
+  const pinHash = hashLocalPin('4321');
+  const raw = JSON.stringify({
+    version: 1,
+    tasks: [
+      makeTask({
+        id: 'rec-1',
+        recurrence: 'weekly',
+        goalId: 'goal-1',
+        subtasks: [{id: 'st-1', title: 'خطوة أولى', done: true}],
+      }),
+    ],
+    notes: [
+      {
+        id: 'pin-n1',
+        title: 'ملاحظة مهمة',
+        content: 'تفاصيل',
+        category: 'شخصي',
+        images: [],
+        pinned: true,
+        createdAt: 1000,
+        updatedAt: 2000,
+      },
+    ],
+    goals: [],
+    habits: [
+      {
+        id: 'h-1',
+        title: 'قراءة ١٥ دقيقة',
+        completedDates: ['2026-11-23'],
+        createdAt: 1000,
+        updatedAt: 2000,
+      },
+    ],
+    focusSessions: [
+      {
+        id: 'fs-1',
+        taskId: 'rec-1',
+        taskTitle: 'مراجعة الخطة',
+        durationMinutes: 25,
+        completedAt: 2000,
+        dateIso: '2026-11-23',
+      },
+    ],
+    preferences: {
+      pinLockEnabled: true,
+      pinHash,
+    },
+  });
+
+  const parsed = parseAndValidateBackup(raw);
+  assert.equal(parsed.tasks[0].recurrence, 'weekly');
+  assert.equal(parsed.tasks[0].goalId, 'goal-1');
+  assert.equal(parsed.tasks[0].subtasks?.length, 1);
+  assert.equal(parsed.notes[0].pinned, true);
+  assert.equal(parsed.habits?.length, 1);
+  assert.equal(parsed.focusSessions?.length, 1);
+  assert.equal(parsed.preferences.pinLockEnabled, true);
+  assert.equal(parsed.preferences.pinHash, pinHash);
+
+  const merged = mergeOmarsLifeStores(createEmptyStore(), parsed);
+  assert.equal(merged.merged.habits?.length, 1);
+  assert.equal(merged.merged.focusSessions?.length, 1);
+});
+
+test('resolveGoalPalette, getGoalStatusLabel, and getTargetDateCountdown support auto & custom goal colors', () => {
+  // Auto progress tones
+  assert.equal(resolveGoalPalette(0, 'auto').tone, 'slate');
+  assert.equal(resolveGoalPalette(20, 'auto').tone, 'amber');
+  assert.equal(resolveGoalPalette(50, 'auto').tone, 'blue');
+  assert.equal(resolveGoalPalette(85, 'auto').tone, 'teal');
+  assert.equal(resolveGoalPalette(100, 'auto').tone, 'emerald');
+
+  // Custom override ignores progress tier tone
+  assert.equal(resolveGoalPalette(15, 'violet').tone, 'violet');
+  assert.equal(resolveGoalPalette(90, 'rose').tone, 'rose');
+
+  // Arabic status labels
+  assert.equal(getGoalStatusLabel(0), 'لسه ما بدأش');
+  assert.equal(getGoalStatusLabel(25), 'في البداية');
+  assert.equal(getGoalStatusLabel(55), 'شغال عليه');
+  assert.equal(getGoalStatusLabel(80), 'قربت تخلص');
+  assert.equal(getGoalStatusLabel(100), 'مكتمل');
+
+  // Target countdown
+  assert.equal(getTargetDateCountdown('2026-11-23', 40, '2026-11-23')?.label, 'آخر يوم النهارده');
+  assert.equal(getTargetDateCountdown('2026-11-20', 40, '2026-11-23')?.isOverdue, true);
+  assert.equal(getTargetDateCountdown('2026-11-20', 100, '2026-11-23')?.label, 'تم الإنجاز');
+
+  // Backup preserves custom color and defaults legacy goals to auto
+  const parsed = parseAndValidateBackup(
+    JSON.stringify({
+      version: 1,
+      tasks: [],
+      notes: [],
+      goals: [
+        {
+          id: 'g-color',
+          kind: 'هدف',
+          title: 'هدف ملون',
+          description: '',
+          targetDate: '2026-12-15',
+          progress: 60,
+          color: 'rose',
+          createdAt: 1000,
+          updatedAt: 1000,
+        },
+        {
+          id: 'g-legacy',
+          kind: 'مشروع',
+          title: 'مشروع قديم',
+          description: '',
+          targetDate: null,
+          progress: 30,
+          createdAt: 1000,
+          updatedAt: 1000,
+        },
+      ],
+    }),
+  );
+  assert.equal(parsed.goals[0].color, 'rose');
+  assert.equal(parsed.goals[1].color, 'auto');
+});
+
+test('computeCalendarMonthStats summarizes monthly tasks, overdue items, goals, and busy days', () => {
+  const today = '2026-11-23';
+  const tasks: TaskItem[] = [
+    makeTask({id: 'm-1', dueDate: '2026-11-10', status: 'خلصت'}),
+    makeTask({id: 'm-2', dueDate: '2026-11-20', status: 'لسه'}), // overdue
+    makeTask({id: 'm-3', dueDate: '2026-11-25', status: 'شغال عليها'}),
+    makeTask({id: 'm-4', dueDate: '2026-12-02', status: 'لسه'}), // next month
+    makeTask({id: 'm-5', dueDate: null, status: 'لسه'}), // unscheduled
+  ];
+  const goals = [
+    {
+      id: 'g-nov',
+      kind: 'هدف' as const,
+      title: 'هدف نوفمبر',
+      description: '',
+      targetDate: '2026-11-25',
+      progress: 50,
+      createdAt: 1000,
+      updatedAt: 1000,
+    },
+    {
+      id: 'g-dec',
+      kind: 'مشروع' as const,
+      title: 'مشروع ديسمبر',
+      description: '',
+      targetDate: '2026-12-15',
+      progress: 10,
+      createdAt: 1000,
+      updatedAt: 1000,
+    },
+  ];
+
+  const stats = computeCalendarMonthStats(2026, 11, tasks, goals, today);
+  assert.equal(stats.monthPrefix, '2026-11');
+  assert.equal(stats.totalTasks, 3);
+  assert.equal(stats.completedTasks, 1);
+  assert.equal(stats.pendingTasks, 2);
+  assert.equal(stats.overdueTasks, 1);
+  assert.equal(stats.goalsCount, 1);
+  assert.equal(stats.busyDaysCount, 3); // Nov 10, Nov 20, Nov 25 (shared by task + goal)
+  assert.equal(stats.completionRate, 33);
+});
+
+test('buildLifeContextSnapshot, backup validation, and Drive merge preserve assistant profile and memories', () => {
+  const raw = JSON.stringify({
+    version: 1,
+    tasks: [
+      makeTask({id: 'a-1', title: 'تقرير مهم', dueDate: '2026-11-20', status: 'لسه'}),
+      makeTask({id: 'a-2', title: 'رياضة', dueDate: '2026-11-23', status: 'خلصت'}),
+    ],
+    notes: [],
+    goals: [],
+    habits: [
+      {
+        id: 'hab-1',
+        title: 'قراءة ١٥ دقيقة',
+        completedDates: ['2026-11-23'],
+        createdAt: 1000,
+        updatedAt: 1000,
+      },
+    ],
+    assistantProfile: {
+      roleAndWork: 'مطور برمجيات',
+      dailyRoutine: 'بصحى ٧ الصبح وبشتغل من ٩ لـ ٥',
+      topPriorities: 'تطوير نفسي وتنظيم وقتي',
+      personalNotes: '',
+      tone: 'coach',
+      updatedAt: 5000,
+    },
+    assistantMemories: [
+      {
+        id: 'mem-1',
+        category: 'روتين',
+        fact: 'أفضل وقت للتركيز الصبح بدري',
+        createdAt: 2000,
+        updatedAt: 2000,
+      },
+    ],
+    assistantMessages: [
+      {
+        id: 'msg-1',
+        role: 'user',
+        text: 'رتّبلي يومي',
+        createdAt: 3000,
+      },
+    ],
+  });
+
+  const parsed = parseAndValidateBackup(raw);
+  assert.equal(parsed.assistantProfile?.roleAndWork, 'مطور برمجيات');
+  assert.equal(parsed.assistantProfile?.tone, 'coach');
+  assert.equal(parsed.assistantMemories?.length, 1);
+  assert.equal(parsed.assistantMessages?.length, 1);
+
+  const snapshot = buildLifeContextSnapshot(parsed, '2026-11-23', '10:30');
+  assert.equal(snapshot.todayIso, '2026-11-23');
+  assert.equal(snapshot.profile.roleAndWork, 'مطور برمجيات');
+  assert.equal(snapshot.memories[0].fact, 'أفضل وقت للتركيز الصبح بدري');
+  assert.equal(snapshot.stats.activeTasksCount, 1);
+  assert.equal(snapshot.stats.overdueTasksCount, 1);
+  assert.equal(snapshot.habits[0].doneToday, true);
+
+  const merged = mergeOmarsLifeStores(createEmptyStore(), parsed);
+  assert.equal(merged.merged.assistantProfile?.roleAndWork, 'مطور برمجيات');
+  assert.equal(merged.merged.assistantMemories?.length, 1);
+  assert.equal(merged.merged.assistantMessages?.length, 1);
+});
+
+test('recurring reminder scheduler computes exact daily, weekly, and monthly triggers with Arabic formatting', () => {
+  // Monday 2026-11-23 at 10:30 local time
+  const mondayMorning = new Date(2026, 10, 23, 10, 30, 0, 0);
+
+  // Daily at 08:00 has already passed today -> rolls to Tuesday 2026-11-24 08:00
+  const nextDaily = new Date(computeNextReminderTrigger('08:00', 'daily', [], mondayMorning));
+  assert.equal(nextDaily.getFullYear(), 2026);
+  assert.equal(nextDaily.getMonth(), 10);
+  assert.equal(nextDaily.getDate(), 24);
+  assert.equal(nextDaily.getHours(), 8);
+  assert.equal(nextDaily.getMinutes(), 0);
+
+  // Weekly on Wednesday (ISO 3) and Friday (ISO 5) at 09:15 -> Wednesday 2026-11-25 09:15
+  const nextWeekly = new Date(computeNextReminderTrigger('09:15', 'weekly', [3, 5], mondayMorning));
+  assert.equal(nextWeekly.getDate(), 25);
+  assert.equal(nextWeekly.getHours(), 9);
+  assert.equal(nextWeekly.getMinutes(), 15);
+
+  // Monthly on Jan 31 after 08:00 clamps safely to Feb 28 (non-leap year 2026)
+  const jan31Late = new Date(2026, 0, 31, 12, 0, 0, 0);
+  const nextMonthly = new Date(computeNextReminderTrigger('08:00', 'monthly', [], jan31Late));
+  assert.equal(nextMonthly.getFullYear(), 2026);
+  assert.equal(nextMonthly.getMonth(), 1); // February
+  assert.equal(nextMonthly.getDate(), 28);
+  assert.equal(nextMonthly.getHours(), 8);
+
+  // Recurrence normalization and Arabic display formatting
+  assert.equal(normalizeReminderRecurrence('DAILY'), 'daily');
+  assert.equal(normalizeReminderRecurrence('unknown'), 'once');
+  assert.equal(formatTimeArabic12('08:00'), '8:00 ص');
+  assert.equal(formatTimeArabic12('20:45'), '8:45 م');
+  assert.equal(formatReminderRecurrenceArabic('daily'), 'كل يوم');
+  assert.equal(formatReminderRecurrenceArabic('weekly', [6, 1]), 'كل السبت، الإثنين');
+
+  // Natural Egyptian Arabic & English extraction for AI reminder tool fallback
+  const dailyAr = inferReminderFieldsFromText('فكرني كل يوم الساعة ٨ الصبح أشرب مية');
+  assert.equal(dailyAr.reminderTime, '08:00');
+  assert.equal(dailyAr.recurrence, 'daily');
+
+  const weeklyAr = inferReminderFieldsFromText('اعمل لي تذكير كل سبت وتلات الساعة 9 ونص بالليل أروح الجيم');
+  assert.equal(weeklyAr.reminderTime, '21:30');
+  assert.equal(weeklyAr.recurrence, 'weekly');
+  assert.deepEqual(weeklyAr.daysOfWeek, [6, 2]);
+
+  const monthlyAr = inferReminderFieldsFromText('تذكير شهرياً الساعة 21:15 دفع فاتورة النت');
+  assert.equal(monthlyAr.reminderTime, '21:15');
+  assert.equal(monthlyAr.recurrence, 'monthly');
+
+  const dailyEn = inferReminderFieldsFromText('Remind me every day at 7:30 am to stretch');
+  assert.equal(dailyEn.reminderTime, '07:30');
+  assert.equal(dailyEn.recurrence, 'daily');
+});
+
+test('detectSpecialistIntent and getRelevantStudiesContext route Egyptian psychology, marketing, and Egypt shop queries accurately', () => {
+  assert.equal(PSYCHOLOGY_MARKETING_STUDIES.length >= 10, true);
+
+  // Egypt shop intent detection
+  const shopIntent = detectSpecialistIntent('عايز أحسن محلات لابتوب في مول البستان وسط البلد');
+  assert.equal(shopIntent.resolvedMode, 'egypt_shops');
+  assert.equal(shopIntent.useEgyptShopsLookup, true);
+
+  // Psychology study intent detection
+  const psychIntent = detectSpecialistIntent('اشرحلي نظرية التنافر المعرفي وعلم النفس السلوكي');
+  assert.equal(psychIntent.resolvedMode, 'psychology');
+  assert.equal(psychIntent.useGoogleSearch, true);
+
+  // Marketing psychology intent detection
+  const mktIntent = detectSpecialistIntent('إزاي أطبق مبادئ تشالديني في الإعلانات والتسعير؟');
+  assert.equal(mktIntent.resolvedMode, 'marketing');
+  assert.equal(mktIntent.useGoogleSearch, true);
+
+  // Explicit mode override takes priority
+  const explicitShop = detectSpecialistIntent('كافيه هادي للشغل', 'egypt_shops');
+  assert.equal(explicitShop.resolvedMode, 'egypt_shops');
+  assert.equal(explicitShop.useEgyptShopsLookup, true);
+
+  // Relevant studies context picks Cialdini for persuasion marketing query
+  const matchedStudies = getRelevantStudiesContext('مبادئ الإقناع تشالديني في التسويق', 'marketing');
+  assert.equal(matchedStudies.length > 0, true);
+  assert.equal(matchedStudies.some((s) => s.researcher.includes('Cialdini')), true);
+});
+
+test('normalizeAdAuditResult and getScoreTone clamp scores, normalize triggers, and keep 3 Egyptian ad rewrites', () => {
+  assert.equal(getScoreTone(8.4), 'emerald');
+  assert.equal(getScoreTone(6.2), 'amber');
+  assert.equal(getScoreTone(3.5), 'rose');
+
+  const normalized = normalizeAdAuditResult({
+    overallScore: 14, // should clamp to 10
+    verdictTitleAr: 'إعلان جيد لكن يحتاج Hook أقوى',
+    summaryAr: 'ملخص التحليل',
+    scores: {hook: 0, persuasion: 8.24, pricing: 6.5, clarityCta: 12},
+    psychologyTriggers: [
+      {principleAr: 'تجنب الخسارة', studyRef: 'Kahneman & Tversky', status: 'MISSING', noteAr: 'أضف تكلفة التأجيل'},
+      {principleAr: 'الإثبات الاجتماعي', studyRef: 'Cialdini', status: 'invalid_val', noteAr: 'أضف تقييمات عملاء'},
+    ],
+    weaknessesAr: ['العنوان عام', ''],
+    rewrittenVariations: [
+      {angleAr: 'زاوية الخسارة', headlineAr: 'عنوان 1', bodyAr: 'نص 1', ctaAr: 'اطلب الآن'},
+      {angleAr: 'زاوية القصة', headlineAr: 'عنوان 2', bodyAr: 'نص 2', ctaAr: 'ابعت رسالة'},
+      {angleAr: 'زاوية العرض', headlineAr: 'عنوان 3', bodyAr: 'نص 3', ctaAr: 'احجز دلوقتي'},
+      {angleAr: 'زيادة', headlineAr: 'عنوان 4', bodyAr: 'نص 4', ctaAr: 'غير مطلوب'},
+    ],
+  });
+
+  assert.equal(normalized.overallScore, 10);
+  assert.equal(normalized.scores.hook, 1);
+  assert.equal(normalized.scores.persuasion, 8.2);
+  assert.equal(normalized.scores.clarityCta, 10);
+  assert.equal(normalized.psychologyTriggers[0].status, 'missing');
+  assert.equal(normalized.psychologyTriggers[1].status, 'weak');
+  assert.equal(normalized.weaknessesAr.length, 1);
+  assert.equal(normalized.rewrittenVariations.length, 3);
+});
+
+test('getDocumentExpiryInfo respects per-document reminder lead time (month, week, day)', () => {
+  const today = '2026-11-24';
+
+  const docIn20DaysMonthLead = getDocumentExpiryInfo(
+    {expiryDate: '2026-12-14', reminderLead: 'month'},
+    today,
+  );
+  assert.equal(docIn20DaysMonthLead.daysLeft, 20);
+  assert.equal(docIn20DaysMonthLead.isReminderActive, true);
+  assert.equal(docIn20DaysMonthLead.state, 'due_soon');
+
+  const docIn20DaysWeekLead = getDocumentExpiryInfo(
+    {expiryDate: '2026-12-14', reminderLead: 'week'},
+    today,
+  );
+  assert.equal(docIn20DaysWeekLead.isReminderActive, false);
+  assert.equal(docIn20DaysWeekLead.state, 'active');
+
+  const docIn5DaysWeekLead = getDocumentExpiryInfo(
+    {expiryDate: '2026-11-29', reminderLead: 'week'},
+    today,
+  );
+  assert.equal(docIn5DaysWeekLead.isReminderActive, true);
+  assert.equal(docIn5DaysWeekLead.state, 'due_soon');
+
+  const docIn5DaysDayLead = getDocumentExpiryInfo(
+    {expiryDate: '2026-11-29', reminderLead: 'day'},
+    today,
+  );
+  assert.equal(docIn5DaysDayLead.isReminderActive, false);
+
+  const docTomorrowDayLead = getDocumentExpiryInfo(
+    {expiryDate: '2026-11-25', reminderLead: 'day'},
+    today,
+  );
+  assert.equal(docTomorrowDayLead.isReminderActive, true);
+  assert.equal(docTomorrowDayLead.state, 'due_soon');
+
+  const expiredDoc = getDocumentExpiryInfo(
+    {expiryDate: '2026-11-20', reminderLead: 'day'},
+    today,
+  );
+  assert.equal(expiredDoc.isReminderActive, true);
+  assert.equal(expiredDoc.state, 'expired');
+});
+
+test('evaluateWeeklyDriveBackupReminder triggers after 7 days without sync and respects snooze', () => {
+  const now = 1_800_000_000_000;
+  const emptyStore = createEmptyStore();
+  assert.equal(
+    evaluateWeeklyDriveBackupReminder({lastSyncedAt: now - SEVEN_DAYS_MS * 2, store: emptyStore, now})
+      .shouldRemind,
+    false,
+  );
+
+  const populatedStore = {
+    ...emptyStore,
+    tasks: [makeTask({createdAt: now - SEVEN_DAYS_MS - 1000})],
+  };
+
+  assert.equal(
+    evaluateWeeklyDriveBackupReminder({
+      lastSyncedAt: now - 3 * 24 * 60 * 60 * 1000,
+      store: populatedStore,
+      now,
+    }).shouldRemind,
+    false,
+  );
+
+  const overdueRes = evaluateWeeklyDriveBackupReminder({
+    lastSyncedAt: now - 8 * 24 * 60 * 60 * 1000,
+    store: populatedStore,
+    now,
+  });
+  assert.equal(overdueRes.shouldRemind, true);
+  assert.equal(overdueRes.daysSinceLastSync, 8);
+  assert.equal(overdueRes.neverSynced, false);
+
+  assert.equal(
+    evaluateWeeklyDriveBackupReminder({
+      lastSyncedAt: now - 8 * 24 * 60 * 60 * 1000,
+      store: populatedStore,
+      now,
+      snoozedUntil: now + 3600_000,
+    }).shouldRemind,
+    false,
+  );
+
+  const neverSyncedRes = evaluateWeeklyDriveBackupReminder({
+    lastSyncedAt: null,
+    store: populatedStore,
+    now,
+  });
+  assert.equal(neverSyncedRes.shouldRemind, true);
+  assert.equal(neverSyncedRes.neverSynced, true);
+});
+
+test('globalSearch and Drive merge include documents alongside tasks and notes', () => {
+  const doc: DocumentItem = {
+    id: 'doc-1',
+    title: 'جواز السفر المصري',
+    category: 'جواز سفر',
+    documentNumber: 'A123456',
+    expiryDate: '2027-05-10',
+    reminderLead: 'week',
+    notes: 'في الدرج الأول',
+    createdAt: 1000,
+    updatedAt: 2000,
+  };
+
+  const searchRes = searchAllLifeItems(
+    {
+      tasks: [makeTask({title: 'تجديد جواز السفر'})],
+      notes: [],
+      documents: [doc],
+      goals: [],
+    },
+    'جواز',
+  );
+  assert.equal(searchRes.counts.all, 2);
+  assert.equal(searchRes.counts.task, 1);
+  assert.equal(searchRes.counts.document, 1);
+
+  const docOnly = searchAllLifeItems(
+    {tasks: [], notes: [], documents: [doc], goals: []},
+    'A123456',
+    'document',
+  );
+  assert.equal(docOnly.results.length, 1);
+  assert.equal(docOnly.results[0].document?.reminderLead, 'week');
+
+  const localStore = createEmptyStore();
+  const remoteStore = {...createEmptyStore(), documents: [doc]};
+  const {merged} = mergeOmarsLifeStores(localStore, remoteStore);
+  assert.equal(merged.documents?.length, 1);
+  assert.equal(merged.documents?.[0].reminderLead, 'week');
+
+  const roundTrip = parseAndValidateBackup(JSON.stringify(merged));
+  assert.equal(roundTrip.documents?.length, 1);
+  assert.equal(roundTrip.documents?.[0].title, 'جواز السفر المصري');
+});
 
 
 

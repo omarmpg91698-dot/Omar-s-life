@@ -3,20 +3,28 @@ import {
   Archive,
   Bell,
   BellRing,
+  Bot,
+  CalendarDays,
   Check,
   CheckSquare,
   Cloud,
   CloudOff,
+  FileBadge2,
   FileText,
   Home,
   Loader2,
+  Lock,
   Moon,
+  MoreHorizontal,
   Settings,
+  Smartphone,
   Sun,
   Target,
   X,
 } from 'lucide-react';
+import {FocusTimerWidget} from './components/FocusTimerWidget';
 import {OfflineIndicator, PWAInstallButton} from './components/PWAInstallButton';
+import {PinLockScreen} from './components/PinLockScreen';
 import {DriveSyncProvider, useDriveSync} from './context/DriveSyncContext';
 import {LifeProvider, useLife} from './context/LifeContext';
 import {
@@ -26,11 +34,16 @@ import {
 } from './storage/localStore';
 import type {NavSection} from './types';
 import {ArchiveView} from './views/ArchiveView';
+import {AssistantView} from './views/AssistantView';
+import {CalendarView} from './views/CalendarView';
+import {DocumentsView} from './views/DocumentsView';
 import {GoalsProjectsView} from './views/GoalsProjectsView';
 import {HomeView} from './views/HomeView';
 import {NotesView} from './views/NotesView';
+import {OmarAiCompanionApp} from './views/OmarAiCompanionApp';
 import {SettingsView} from './views/SettingsView';
 import {TasksView} from './views/TasksView';
+import {getDocumentExpiryInfo} from './storage/documentsAndReminders';
 
 interface NavItem {
   id: NavSection;
@@ -41,12 +54,17 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   {id: 'home', label: 'الرئيسية', shortLabel: 'الرئيسية', icon: Home},
+  {id: 'assistant', label: 'المساعد الذكي', shortLabel: 'المساعد', icon: Bot},
   {id: 'tasks', label: 'مهامي', shortLabel: 'مهامي', icon: CheckSquare},
+  {id: 'calendar', label: 'التقويم', shortLabel: 'التقويم', icon: CalendarDays},
   {id: 'notes', label: 'ملاحظاتي', shortLabel: 'ملاحظاتي', icon: FileText},
+  {id: 'documents', label: 'وثائقي', shortLabel: 'وثائقي', icon: FileBadge2},
   {id: 'goals', label: 'أهدافي ومشاريعي', shortLabel: 'أهدافي', icon: Target},
   {id: 'archive', label: 'الأرشيف', shortLabel: 'الأرشيف', icon: Archive},
   {id: 'settings', label: 'الإعدادات', shortLabel: 'الإعدادات', icon: Settings},
 ];
+
+const MOBILE_PRIMARY_NAV_IDS: NavSection[] = ['home', 'assistant', 'tasks', 'calendar', 'goals'];
 
 const Shell: React.FC = () => {
   const {
@@ -54,16 +72,35 @@ const Shell: React.FC = () => {
     setActiveSection,
     tasks,
     archivedTasks,
+    documents,
     lastAutoArchivedCount,
     dismissAutoArchiveNotice,
     preferences,
     updatePreferences,
     updateTask,
+    isAppLocked,
+    lockApp,
+    unlockApp,
   } = useLife();
   const {needsAuth, hasUnsyncedChanges, busyAction, requestSmartSync} = useDriveSync();
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [remindersPanelOpen, setRemindersPanelOpen] = useState(false);
+  const [moreSheetOpen, setMoreSheetOpen] = useState(false);
   const [gmpQuotaExceeded, setGmpQuotaExceeded] = useState(false);
+  const [workspaceMode, setWorkspaceMode] = useState<'omar-ai' | 'life'>(() => {
+    if (typeof localStorage === 'undefined') return 'omar-ai';
+    const saved = localStorage.getItem('omar_workspace_mode_v1');
+    return saved === 'life' ? 'life' : 'omar-ai';
+  });
+
+  const switchWorkspace = (next: 'omar-ai' | 'life') => {
+    setWorkspaceMode(next);
+    try {
+      localStorage.setItem('omar_workspace_mode_v1', next);
+    } catch {
+      // Ignore storage error
+    }
+  };
 
   useEffect(() => {
     const onQuotaExceeded = () => setGmpQuotaExceeded(true);
@@ -73,6 +110,9 @@ const Shell: React.FC = () => {
 
   const todayIso = getTodayIso();
   const openTasksCount = tasks.filter((t) => t.status !== 'خلصت').length;
+  const expiringDocsCount = documents.filter(
+    (doc) => getDocumentExpiryInfo(doc, todayIso).isReminderActive,
+  ).length;
   const activeReminders = preferences.remindersEnabled
     ? tasks.filter((t) => isTaskReminderDueToday(t, todayIso))
     : [];
@@ -136,10 +176,16 @@ const Shell: React.FC = () => {
     switch (activeSection) {
       case 'home':
         return <HomeView />;
+      case 'assistant':
+        return <AssistantView />;
       case 'tasks':
         return <TasksView />;
+      case 'calendar':
+        return <CalendarView />;
       case 'notes':
         return <NotesView />;
+      case 'documents':
+        return <DocumentsView />;
       case 'goals':
         return <GoalsProjectsView />;
       case 'archive':
@@ -148,6 +194,22 @@ const Shell: React.FC = () => {
         return <SettingsView />;
     }
   };
+
+  const hasPinLock = Boolean(preferences.pinLockEnabled && preferences.pinHash);
+
+  if (isAppLocked && hasPinLock && preferences.pinHash) {
+    return (
+      <PinLockScreen
+        expectedHash={preferences.pinHash}
+        userName={preferences.userName}
+        onUnlock={unlockApp}
+      />
+    );
+  }
+
+  if (workspaceMode === 'omar-ai') {
+    return <OmarAiCompanionApp onSwitchToLifeApp={() => switchWorkspace('life')} />;
+  }
 
   return (
     <div className="min-h-screen bg-[#F7F9FB] text-slate-900 dark:bg-slate-900 dark:text-slate-100">
@@ -230,6 +292,15 @@ const Shell: React.FC = () => {
                         {openTasksCount}
                       </span>
                     )}
+                    {item.id === 'documents' && expiringDocsCount > 0 && (
+                      <span
+                        className={`font-mono text-xs font-semibold tabular-nums ${
+                          active ? 'text-white/95' : 'text-amber-600 dark:text-amber-400'
+                        }`}
+                      >
+                        {expiringDocsCount}
+                      </span>
+                    )}
                     {item.id === 'archive' && archivedTasks.length > 0 && (
                       <span
                         className={`font-mono text-xs tabular-nums ${
@@ -246,6 +317,14 @@ const Shell: React.FC = () => {
           </div>
 
           <div className="space-y-2 border-t border-slate-100 pt-3 dark:border-slate-700">
+            <button
+              type="button"
+              onClick={() => switchWorkspace('omar-ai')}
+              className="flex min-h-[40px] w-full items-center justify-center gap-2 rounded-xl bg-teal-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-teal-500"
+            >
+              <Smartphone className="h-3.5 w-3.5" />
+              <span>فتح Omar&apos;s personal assistant</span>
+            </button>
             <PWAInstallButton variant="sidebar" />
             <button
               type="button"
@@ -298,6 +377,17 @@ const Shell: React.FC = () => {
                 </>
               )}
             </button>
+
+            {hasPinLock && (
+              <button
+                type="button"
+                onClick={lockApp}
+                className="flex min-h-[40px] w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-700 hover:border-accent hover:text-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              >
+                <Lock className="h-3.5 w-3.5" />
+                <span>قفل التطبيق</span>
+              </button>
+            )}
           </div>
         </aside>
 
@@ -379,6 +469,17 @@ const Shell: React.FC = () => {
                 )}
                 <span>{preferences.theme === 'dark' ? 'فاتح' : 'غامق'}</span>
               </button>
+
+              {hasPinLock && (
+                <button
+                  type="button"
+                  onClick={lockApp}
+                  aria-label="قفل التطبيق"
+                  className="inline-flex min-h-[38px] items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-2.5 text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                >
+                  <Lock className="h-3.5 w-3.5" />
+                </button>
+              )}
             </div>
           </header>
 
@@ -580,19 +681,110 @@ const Shell: React.FC = () => {
         </div>
       )}
 
-      {/* Mobile Bottom Navigation (6 sections) */}
+      {/* Floating Focus Timer Bar when active outside HomeView */}
+      {activeSection !== 'home' && <FocusTimerWidget variant="floating" />}
+
+      {/* Mobile More Bottom Sheet (Archive & Settings) */}
+      {moreSheetOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end bg-slate-950/45 backdrop-blur-xs lg:hidden"
+          onClick={() => setMoreSheetOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full rounded-t-3xl border-t border-slate-200 bg-white px-5 pb-6 pt-3 shadow-2xl pb-safe dark:border-slate-700 dark:bg-slate-900"
+          >
+            <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-300 dark:bg-slate-700" />
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">أقسام إضافية</h2>
+              <button
+                type="button"
+                onClick={() => setMoreSheetOpen(false)}
+                aria-label="إغلاق"
+                className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setMoreSheetOpen(false);
+                  switchWorkspace('omar-ai');
+                }}
+                className="flex min-h-[48px] w-full items-center justify-between rounded-2xl bg-teal-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-500"
+              >
+                <span className="flex items-center gap-3">
+                  <Smartphone className="h-4 w-4 shrink-0" />
+                  <span>فتح Omar&apos;s personal assistant</span>
+                </span>
+              </button>
+              {(['notes', 'documents', 'archive', 'settings'] as const).map((secId) => {
+                const nav = NAV_ITEMS.find((i) => i.id === secId)!;
+                const Icon = nav.icon;
+                const active = activeSection === secId;
+                return (
+                  <button
+                    key={secId}
+                    type="button"
+                    onClick={() => {
+                      setActiveSection(secId);
+                      setMoreSheetOpen(false);
+                    }}
+                    className={`flex min-h-[48px] w-full items-center justify-between rounded-2xl border px-4 text-sm font-semibold transition-colors ${
+                      active
+                        ? 'border-accent bg-accent text-white'
+                        : 'border-slate-200 bg-slate-50 text-slate-800 hover:border-accent dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
+                    }`}
+                  >
+                    <span className="flex items-center gap-3">
+                      <Icon className="h-4 w-4 shrink-0" />
+                      <span>{nav.label}</span>
+                    </span>
+                    {secId === 'documents' && expiringDocsCount > 0 && (
+                      <span
+                        className={`font-mono text-xs font-semibold tabular-nums ${
+                          active ? 'text-white/95' : 'text-amber-600 dark:text-amber-400'
+                        }`}
+                      >
+                        {expiringDocsCount}
+                      </span>
+                    )}
+                    {secId === 'archive' && archivedTasks.length > 0 && (
+                      <span
+                        className={`font-mono text-xs tabular-nums ${
+                          active ? 'text-white/90' : 'text-slate-500 dark:text-slate-400'
+                        }`}
+                      >
+                        {archivedTasks.length}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mobile Bottom Navigation (5 primary daily tabs + More sheet) */}
       <nav
         aria-label="التنقل السريع"
         className="fixed bottom-0 start-0 end-0 z-40 grid h-16 grid-cols-6 items-center border-t border-slate-200 bg-white/95 backdrop-blur-md pb-safe dark:border-slate-800 dark:bg-slate-800/95 lg:hidden"
       >
-        {NAV_ITEMS.map((item) => {
+        {MOBILE_PRIMARY_NAV_IDS.map((id) => {
+          const item = NAV_ITEMS.find((n) => n.id === id)!;
           const Icon = item.icon;
           const active = activeSection === item.id;
           return (
             <button
               key={item.id}
               type="button"
-              onClick={() => setActiveSection(item.id)}
+              onClick={() => {
+                setMoreSheetOpen(false);
+                setActiveSection(item.id);
+              }}
               className={`flex min-h-[44px] flex-col items-center justify-center gap-0.5 px-0.5 transition-colors ${
                 active ? 'text-accent' : 'text-slate-500 dark:text-slate-400'
               }`}
@@ -604,6 +796,26 @@ const Shell: React.FC = () => {
             </button>
           );
         })}
+
+        <button
+          type="button"
+          onClick={() => setMoreSheetOpen((v) => !v)}
+          aria-expanded={moreSheetOpen}
+          className={`flex min-h-[44px] flex-col items-center justify-center gap-0.5 px-0.5 transition-colors ${
+            moreSheetOpen ||
+            activeSection === 'notes' ||
+            activeSection === 'documents' ||
+            activeSection === 'archive' ||
+            activeSection === 'settings'
+              ? 'text-accent'
+              : 'text-slate-500 dark:text-slate-400'
+          }`}
+        >
+          <MoreHorizontal className="h-5 w-5" />
+          <span className="max-w-full truncate text-[10px] font-medium sm:text-[11px]">
+            المزيد
+          </span>
+        </button>
       </nav>
     </div>
   );

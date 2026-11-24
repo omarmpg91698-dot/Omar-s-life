@@ -1,37 +1,58 @@
-import React, {useEffect, useMemo, useState} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {
   AlertTriangle,
   Archive,
   Bell,
   BellOff,
   BellRing,
+  CalendarDays,
+  Check,
   CheckCircle2,
+  CheckSquare,
   CircleDot,
   Flag,
   Layers,
+  List,
+  ListChecks,
   Pencil,
   Plus,
+  Repeat,
+  RotateCcw,
   Search,
+  Square,
   Tag,
+  Target,
+  Timer,
   Trash2,
   X,
 } from 'lucide-react';
+import {CalendarMonthView} from '../components/CalendarMonthView';
+import {FilterDropdown, type FilterDropdownOption} from '../components/FilterDropdown';
 import {SmartTagSuggestionsBar} from '../components/SmartTagSuggestionsBar';
 import {useLife} from '../context/LifeContext';
 import {
+  createSimpleId,
   formatFriendlyDate,
   formatReminderTime,
+  getOffsetIso,
   getTodayIso,
   isTaskDueToday,
   isTaskOverdue,
   isTaskReminderDueToday,
 } from '../storage/localStore';
+import {RECURRENCE_LABELS} from '../storage/productivityUtils';
 import {
   suggestSmartTaskTags,
   type SmartTagSuggestion,
 } from '../storage/smartTagSuggestions';
 import {DEFAULT_AUTO_ARCHIVE_DAYS, daysUntilAutoArchive} from '../storage/taskArchive';
-import type {TaskItem, TaskPriority, TaskStatus} from '../types';
+import type {
+  TaskItem,
+  TaskPriority,
+  TaskRecurrence,
+  TaskStatus,
+  TaskSubtask,
+} from '../types';
 
 type TaskFilterTab = 'الكل' | 'النهارده' | TaskStatus | 'اتأجلت';
 
@@ -77,10 +98,19 @@ export const TasksView: React.FC = () => {
   const {
     tasks,
     archivedTasks,
+    goals,
     preferences,
+    tasksViewMode,
+    setTasksViewMode,
+    lastRecurringNotice,
+    dismissRecurringNotice,
+    startFocusForTask,
     addTask,
     updateTask,
     archiveTask,
+    bulkAddTagToTasks,
+    bulkArchiveTasks,
+    bulkDeleteTasks,
     deleteTask,
     addTaskTag,
     setActiveSection,
@@ -100,7 +130,15 @@ export const TasksView: React.FC = () => {
   const [customTagInput, setCustomTagInput] = useState('');
   const [reminderEnabled, setReminderEnabled] = useState(true);
   const [reminderTime, setReminderTime] = useState('');
+  const [recurrence, setRecurrence] = useState<TaskRecurrence>('none');
+  const [goalId, setGoalId] = useState<string>('');
+  const [draftSubtasks, setDraftSubtasks] = useState<TaskSubtask[]>([]);
+  const [draftSubtaskInput, setDraftSubtaskInput] = useState('');
   const [formError, setFormError] = useState('');
+
+  // Inline subtasks expansion state per task
+  const [expandedSubtasksIds, setExpandedSubtasksIds] = useState<Record<string, boolean>>({});
+  const [inlineSubtaskInputs, setInlineSubtaskInputs] = useState<Record<string, string>>({});
 
   // Filters & grouping
   const [statusTab, setStatusTab] = useState<TaskFilterTab>('الكل');
@@ -109,6 +147,26 @@ export const TasksView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [groupByTag, setGroupByTag] = useState(false);
   const [priorityAlertDismissed, setPriorityAlertDismissed] = useState(false);
+
+  // Multi-select bulk actions state
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
+  const [bulkTagChoice, setBulkTagChoice] = useState('');
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+  const [bulkFeedback, setBulkFeedback] = useState<string | null>(null);
+
+  // Quick swipe gesture state (swipe right = done, swipe left = postpone to tomorrow)
+  const [swipeState, setSwipeState] = useState<{id: string; dx: number} | null>(null);
+  const swipeTouchRef = useRef<{
+    id: string;
+    startX: number;
+    startY: number;
+    locked: 'horizontal' | 'vertical' | null;
+  } | null>(null);
+  const [swipeNotice, setSwipeNotice] = useState<{
+    message: string;
+    undo: () => void;
+  } | null>(null);
 
   // Edit modal state
   const [editingTask, setEditingTask] = useState<TaskItem | null>(null);
@@ -120,6 +178,16 @@ export const TasksView: React.FC = () => {
   const [editCustomTag, setEditCustomTag] = useState('');
   const [editReminderEnabled, setEditReminderEnabled] = useState(true);
   const [editReminderTime, setEditReminderTime] = useState('');
+  const [editRecurrence, setEditRecurrence] = useState<TaskRecurrence>('none');
+  const [editGoalId, setEditGoalId] = useState<string>('');
+  const [editSubtasks, setEditSubtasks] = useState<TaskSubtask[]>([]);
+  const [editSubtaskInput, setEditSubtaskInput] = useState('');
+
+  const goalsById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const g of goals) map.set(g.id, g.title);
+    return map;
+  }, [goals]);
 
   useEffect(() => {
     if (!focusedItem || focusedItem.section !== 'tasks') return;
@@ -294,6 +362,14 @@ export const TasksView: React.FC = () => {
         if (!tagsToSave.includes(tagToUse)) tagsToSave.push(tagToUse);
       }
     }
+    const finalSubtasks = [...draftSubtasks];
+    if (draftSubtaskInput.trim()) {
+      finalSubtasks.push({
+        id: createSimpleId(),
+        title: draftSubtaskInput.trim(),
+        done: false,
+      });
+    }
     setFormError('');
     addTask({
       title: title.trim(),
@@ -303,6 +379,9 @@ export const TasksView: React.FC = () => {
       tags: tagsToSave,
       reminderEnabled,
       reminderTime: reminderEnabled && reminderTime ? reminderTime : null,
+      recurrence,
+      goalId: goalId || null,
+      subtasks: finalSubtasks,
     });
     setTitle('');
     setDueDate(todayIso);
@@ -312,6 +391,40 @@ export const TasksView: React.FC = () => {
     setCustomTagInput('');
     setReminderEnabled(true);
     setReminderTime('');
+    setRecurrence('none');
+    setGoalId('');
+    setDraftSubtasks([]);
+    setDraftSubtaskInput('');
+  };
+
+  const handleAddDraftSubtask = () => {
+    const clean = draftSubtaskInput.trim();
+    if (!clean) return;
+    setDraftSubtasks((prev) => [...prev, {id: createSimpleId(), title: clean, done: false}]);
+    setDraftSubtaskInput('');
+  };
+
+  const handleToggleInlineSubtask = (task: TaskItem, subtaskId: string) => {
+    const next = (task.subtasks ?? []).map((st) =>
+      st.id === subtaskId ? {...st, done: !st.done} : st,
+    );
+    updateTask(task.id, {subtasks: next});
+  };
+
+  const handleAddInlineSubtask = (task: TaskItem) => {
+    const text = (inlineSubtaskInputs[task.id] ?? '').trim();
+    if (!text) return;
+    const next: TaskSubtask[] = [
+      ...(task.subtasks ?? []),
+      {id: createSimpleId(), title: text, done: false},
+    ];
+    updateTask(task.id, {subtasks: next});
+    setInlineSubtaskInputs((prev) => ({...prev, [task.id]: ''}));
+  };
+
+  const handleDeleteInlineSubtask = (task: TaskItem, subtaskId: string) => {
+    const next = (task.subtasks ?? []).filter((st) => st.id !== subtaskId);
+    updateTask(task.id, {subtasks: next});
   };
 
   const startEdit = (task: TaskItem) => {
@@ -324,11 +437,23 @@ export const TasksView: React.FC = () => {
     setEditCustomTag('');
     setEditReminderEnabled(task.reminderEnabled ?? true);
     setEditReminderTime(task.reminderTime ?? '');
+    setEditRecurrence(task.recurrence ?? 'none');
+    setEditGoalId(task.goalId ?? '');
+    setEditSubtasks(task.subtasks ?? []);
+    setEditSubtaskInput('');
   };
 
   const handleSaveEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingTask || !editTitle.trim()) return;
+    const finalEditSubtasks = [...editSubtasks];
+    if (editSubtaskInput.trim()) {
+      finalEditSubtasks.push({
+        id: createSimpleId(),
+        title: editSubtaskInput.trim(),
+        done: false,
+      });
+    }
     updateTask(editingTask.id, {
       title: editTitle.trim(),
       dueDate: editDueDate || null,
@@ -337,6 +462,9 @@ export const TasksView: React.FC = () => {
       tags: editTags,
       reminderEnabled: editReminderEnabled,
       reminderTime: editReminderEnabled && editReminderTime ? editReminderTime : null,
+      recurrence: editRecurrence,
+      goalId: editGoalId || null,
+      subtasks: finalEditSubtasks,
     });
     setEditingTask(null);
   };
@@ -411,6 +539,177 @@ export const TasksView: React.FC = () => {
     setSearchQuery('');
   };
 
+  const tagDropdownOptions: FilterDropdownOption[] = useMemo(() => {
+    const opts: FilterDropdownOption[] = [
+      {value: 'الكل', label: 'الكل', count: tasksMatchingNonTagFilters.length},
+      ...availableTags.map((tag) => ({
+        value: tag,
+        label: tag,
+        count: tagCounts.counts.get(tag) ?? 0,
+      })),
+    ];
+    if (tagCounts.untagged > 0 || effectiveTagFilter === 'من غير تصنيف') {
+      opts.push({
+        value: 'من غير تصنيف',
+        label: 'من غير تصنيف',
+        count: tagCounts.untagged,
+      });
+    }
+    return opts;
+  }, [availableTags, effectiveTagFilter, tagCounts, tasksMatchingNonTagFilters.length]);
+
+  const priorityDropdownOptions: FilterDropdownOption[] = useMemo(
+    () => [
+      {value: 'الكل', label: 'الكل', count: tasks.length},
+      ...PRIORITY_ORDER.map((level) => {
+        const meta = PRIORITY_META[level];
+        return {
+          value: level,
+          label: meta.label,
+          count: priorityCounts[level],
+          dotClass: meta.dotClass,
+        };
+      }),
+    ],
+    [priorityCounts, tasks.length],
+  );
+
+  // Keep selected IDs pruned to currently existing active tasks
+  const activeTaskIdSet = useMemo(() => new Set(tasks.map((t) => t.id)), [tasks]);
+  const effectiveSelectedIds = useMemo(
+    () => selectedTaskIds.filter((id) => activeTaskIdSet.has(id)),
+    [selectedTaskIds, activeTaskIdSet],
+  );
+  const selectedIdSet = useMemo(() => new Set(effectiveSelectedIds), [effectiveSelectedIds]);
+
+  const toggleSelectionMode = () => {
+    setSelectionMode((prev) => {
+      if (prev) {
+        setSelectedTaskIds([]);
+        setConfirmBulkDelete(false);
+      }
+      return !prev;
+    });
+  };
+
+  const toggleSelectTask = (id: string) => {
+    setConfirmBulkDelete(false);
+    setSelectedTaskIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id],
+    );
+  };
+
+  const handleToggleSelectAllFiltered = () => {
+    setConfirmBulkDelete(false);
+    const filteredIds = filteredTasks.map((t) => t.id);
+    const allSelected =
+      filteredIds.length > 0 && filteredIds.every((id) => selectedIdSet.has(id));
+    if (allSelected) {
+      setSelectedTaskIds((prev) => prev.filter((id) => !filteredIds.includes(id)));
+    } else {
+      setSelectedTaskIds((prev) => Array.from(new Set([...prev, ...filteredIds])));
+    }
+  };
+
+  const handleBulkApplyTag = () => {
+    const tagToApply = bulkTagChoice || availableTags[0];
+    if (!tagToApply || effectiveSelectedIds.length === 0) return;
+    bulkAddTagToTasks(effectiveSelectedIds, tagToApply);
+    setBulkFeedback(`تم إضافة التصنيف #${tagToApply} لـ ${effectiveSelectedIds.length} مهام.`);
+    setSelectedTaskIds([]);
+    setSelectionMode(false);
+  };
+
+  const handleBulkArchive = () => {
+    if (effectiveSelectedIds.length === 0) return;
+    const count = effectiveSelectedIds.length;
+    bulkArchiveTasks(effectiveSelectedIds);
+    setBulkFeedback(`تم نقل ${count} مهام إلى الأرشيف.`);
+    setSelectedTaskIds([]);
+    setSelectionMode(false);
+  };
+
+  const handleBulkDelete = () => {
+    if (effectiveSelectedIds.length === 0) return;
+    const count = effectiveSelectedIds.length;
+    bulkDeleteTasks(effectiveSelectedIds);
+    setBulkFeedback(`تم حذف ${count} مهام بنجاح.`);
+    setSelectedTaskIds([]);
+    setConfirmBulkDelete(false);
+    setSelectionMode(false);
+  };
+
+  const handleRowTouchStart = (task: TaskItem, e: React.TouchEvent<HTMLDivElement>) => {
+    if (selectionMode || e.touches.length !== 1) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('button, input, select, textarea, a')) return;
+    const touch = e.touches[0];
+    swipeTouchRef.current = {
+      id: task.id,
+      startX: touch.clientX,
+      startY: touch.clientY,
+      locked: null,
+    };
+  };
+
+  const handleRowTouchMove = (task: TaskItem, e: React.TouchEvent<HTMLDivElement>) => {
+    const ref = swipeTouchRef.current;
+    if (!ref || ref.id !== task.id || e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    const dx = touch.clientX - ref.startX;
+    const dy = touch.clientY - ref.startY;
+    if (!ref.locked) {
+      if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx)) {
+        ref.locked = 'vertical';
+        return;
+      }
+      if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy)) {
+        ref.locked = 'horizontal';
+      } else {
+        return;
+      }
+    }
+    if (ref.locked !== 'horizontal') return;
+    const clamped = Math.max(-110, Math.min(110, dx));
+    setSwipeState({id: task.id, dx: clamped});
+  };
+
+  const handleRowTouchEnd = (task: TaskItem) => {
+    const ref = swipeTouchRef.current;
+    const currentSwipe = swipeState;
+    swipeTouchRef.current = null;
+    setSwipeState(null);
+    if (!ref || ref.id !== task.id || !currentSwipe || currentSwipe.id !== task.id) return;
+
+    const SWIPE_THRESHOLD = 72;
+    if (currentSwipe.dx >= SWIPE_THRESHOLD) {
+      // Swipe right => mark task completed
+      const prevStatus = task.status;
+      if (prevStatus !== 'خلصت') {
+        updateTask(task.id, {status: 'خلصت'});
+        setSwipeNotice({
+          message: `تم تعليم «${task.title}» خلصت.`,
+          undo: () => {
+            updateTask(task.id, {status: prevStatus});
+            setSwipeNotice(null);
+          },
+        });
+      }
+    } else if (currentSwipe.dx <= -SWIPE_THRESHOLD) {
+      // Swipe left => postpone to tomorrow
+      const prevDueDate = task.dueDate;
+      const tomorrowIso = getOffsetIso(1);
+      updateTask(task.id, {dueDate: tomorrowIso});
+      setSwipeNotice({
+        message: `تم تأجيل «${task.title}» لبكرة.`,
+        undo: () => {
+          updateTask(task.id, {dueDate: prevDueDate});
+          setSwipeNotice(null);
+        },
+      });
+    }
+  };
+
   const groupedByTagSections = useMemo(() => {
     if (!groupByTag) return [];
     const sections: Array<{key: string; label: string; items: TaskItem[]}> = [];
@@ -436,201 +735,385 @@ export const TasksView: React.FC = () => {
     const reminderOn = task.reminderEnabled ?? true;
     const reminderDueToday = isTaskReminderDueToday(task, todayIso);
     const taskTags = task.tags ?? [];
+    const taskSubtasks = task.subtasks ?? [];
+    const doneSubtasksCount = taskSubtasks.filter((st) => st.done).length;
+    const subtasksExpanded = Boolean(expandedSubtasksIds[task.id]);
+    const linkedGoalTitle = task.goalId ? goalsById.get(task.goalId) : undefined;
     const priorityInfo = PRIORITY_META[task.priority] ?? PRIORITY_META['متوسط'];
     const PriorityIcon = priorityInfo.icon;
     const isHighOpen = task.priority === 'مهم' && task.status !== 'خلصت';
+    const isSelected = selectedIdSet.has(task.id);
+    const activeSwipeDx = swipeState?.id === task.id ? swipeState.dx : 0;
+
     return (
-      <div
-        key={task.id}
-        id={`life-item-${task.id}`}
-        className={`flex flex-wrap items-center justify-between gap-3 p-4 transition-colors ${
-          highlightedTaskId === task.id
-            ? 'bg-accent-soft/60 ring-2 ring-inset ring-accent'
-            : dueToday
-              ? 'bg-amber-50/45 dark:bg-amber-950/15'
-              : isHighOpen
-                ? 'bg-red-50/30 dark:bg-red-950/10'
-                : ''
-        }`}
-      >
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          <button
-            type="button"
-            onClick={() =>
-              updateTask(task.id, {status: task.status === 'خلصت' ? 'لسه' : 'خلصت'})
-            }
-            aria-label={`تبديل حالة ${task.title}`}
-            className={`flex min-h-[42px] min-w-[42px] shrink-0 items-center justify-center rounded-xl border transition-colors ${
-              task.status === 'خلصت'
-                ? 'border-emerald-500/40 bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400'
-                : 'border-slate-200 bg-slate-50 text-slate-400 hover:border-accent hover:text-accent dark:border-slate-700 dark:bg-slate-900'
+      <div key={task.id} id={`life-item-${task.id}`} className="relative overflow-hidden">
+        {/* Quick swipe reveal backdrop (right = done, left = postpone tomorrow) */}
+        {activeSwipeDx !== 0 && (
+          <div
+            aria-hidden="true"
+            className={`pointer-events-none absolute inset-0 flex items-center px-5 text-xs font-bold text-white ${
+              activeSwipeDx > 0
+                ? 'justify-end bg-emerald-500/90'
+                : 'justify-start bg-amber-500/90'
             }`}
           >
-            <CheckCircle2 className="h-5 w-5" />
-          </button>
-
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              {/* Colored priority dot + icon right beside task title */}
-              <span
-                title={`أولوية: ${priorityInfo.label}`}
-                aria-label={`أولوية ${priorityInfo.label}`}
-                className={`inline-flex shrink-0 items-center gap-1.5 ${
-                  task.status === 'خلصت' ? 'opacity-45' : ''
-                }`}
-              >
-                <span className={`h-2.5 w-2.5 rounded-full ${priorityInfo.dotClass}`} />
-                <PriorityIcon className={`h-3.5 w-3.5 ${priorityInfo.textClass}`} />
+            {activeSwipeDx > 0 ? (
+              <span className="inline-flex items-center gap-1.5">
+                <CheckCircle2 className="h-4 w-4" />
+                <span>خلصت</span>
               </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5">
+                <CalendarDays className="h-4 w-4" />
+                <span>تأجيل لبكرة</span>
+              </span>
+            )}
+          </div>
+        )}
 
-              <p
-                className={`text-sm font-medium ${
-                  task.status === 'خلصت'
-                    ? 'text-slate-400 line-through dark:text-slate-500'
-                    : 'text-slate-900 dark:text-slate-100'
+        <div
+          onTouchStart={(e) => handleRowTouchStart(task, e)}
+          onTouchMove={(e) => handleRowTouchMove(task, e)}
+          onTouchEnd={() => handleRowTouchEnd(task)}
+          onTouchCancel={() => {
+            swipeTouchRef.current = null;
+            setSwipeState(null);
+          }}
+          style={
+            activeSwipeDx !== 0
+              ? {transform: `translateX(${activeSwipeDx}px)`}
+              : undefined
+          }
+          className={`relative bg-white p-4 transition-transform dark:bg-slate-800/90 ${
+            activeSwipeDx === 0 ? 'duration-150' : 'duration-0'
+          } ${
+            highlightedTaskId === task.id
+              ? '!bg-accent-soft/60 ring-2 ring-inset ring-accent'
+              : isSelected
+                ? '!bg-accent-soft/45 dark:!bg-accent-soft/20'
+                : dueToday
+                  ? '!bg-amber-50/45 dark:!bg-amber-950/15'
+                  : isHighOpen
+                    ? '!bg-red-50/30 dark:!bg-red-950/10'
+                    : ''
+          }`}
+        >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            {selectionMode && (
+              <button
+                type="button"
+                onClick={() => toggleSelectTask(task.id)}
+                aria-label={isSelected ? `إلغاء تحديد ${task.title}` : `تحديد ${task.title}`}
+                aria-pressed={isSelected}
+                className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border transition-colors ${
+                  isSelected
+                    ? 'border-accent bg-accent text-white'
+                    : 'border-slate-300 bg-white text-transparent hover:border-accent dark:border-slate-600 dark:bg-slate-900'
                 }`}
               >
-                {task.title}
-              </p>
-              {dueToday && (
-                <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-700 dark:text-amber-400">
-                  <BellRing className="h-3.5 w-3.5" />
-                  <span>
-                    ميعادها النهارده
-                    {task.reminderTime ? ` · ${formatReminderTime(task.reminderTime)}` : ''}
+                <Check className="h-3.5 w-3.5" />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() =>
+                updateTask(task.id, {status: task.status === 'خلصت' ? 'لسه' : 'خلصت'})
+              }
+              aria-label={`تبديل حالة ${task.title}`}
+              className={`flex min-h-[42px] min-w-[42px] shrink-0 items-center justify-center rounded-xl border transition-colors ${
+                task.status === 'خلصت'
+                  ? 'border-emerald-500/40 bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400'
+                  : 'border-slate-200 bg-slate-50 text-slate-400 hover:border-accent hover:text-accent dark:border-slate-700 dark:bg-slate-900'
+              }`}
+            >
+              <CheckCircle2 className="h-5 w-5" />
+            </button>
+
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  title={`أولوية: ${priorityInfo.label}`}
+                  aria-label={`أولوية ${priorityInfo.label}`}
+                  className={`inline-flex shrink-0 items-center gap-1.5 ${
+                    task.status === 'خلصت' ? 'opacity-45' : ''
+                  }`}
+                >
+                  <span className={`h-2.5 w-2.5 rounded-full ${priorityInfo.dotClass}`} />
+                  <PriorityIcon className={`h-3.5 w-3.5 ${priorityInfo.textClass}`} />
+                </span>
+
+                <p
+                  className={`text-sm font-medium ${
+                    task.status === 'خلصت'
+                      ? 'text-slate-400 line-through dark:text-slate-500'
+                      : 'text-slate-900 dark:text-slate-100'
+                  }`}
+                >
+                  {task.title}
+                </p>
+                {task.recurrence && task.recurrence !== 'none' && (
+                  <span className="inline-flex items-center gap-1 rounded-md bg-accent-soft px-1.5 py-0.5 text-[11px] font-semibold text-accent">
+                    <Repeat className="h-3 w-3" />
+                    <span>{RECURRENCE_LABELS[task.recurrence]}</span>
                   </span>
+                )}
+                {dueToday && (
+                  <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-700 dark:text-amber-400">
+                    <BellRing className="h-3.5 w-3.5" />
+                    <span>
+                      ميعادها النهارده
+                      {task.reminderTime ? ` · ${formatReminderTime(task.reminderTime)}` : ''}
+                    </span>
+                  </span>
+                )}
+              </div>
+              <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+                <span className={`inline-flex items-center gap-1 ${priorityInfo.textClass}`}>
+                  <span>{priorityInfo.label}</span>
+                </span>
+                {isHighOpen && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="font-medium text-red-600 dark:text-red-400">
+                      تنبيه أولوية عالية
+                    </span>
+                  </>
+                )}
+                <span aria-hidden="true">·</span>
+                <span
+                  className={
+                    overdue
+                      ? 'font-medium text-red-600 dark:text-red-400'
+                      : dueToday
+                        ? 'font-medium text-amber-700 dark:text-amber-400'
+                        : ''
+                  }
+                >
+                  {overdue
+                    ? `اتأجلت (${formatFriendlyDate(task.dueDate)})`
+                    : formatFriendlyDate(task.dueDate)}
+                </span>
+                {linkedGoalTitle && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <button
+                      type="button"
+                      onClick={() => setActiveSection('goals')}
+                      className="inline-flex items-center gap-1 font-medium text-amber-700 hover:underline dark:text-amber-400"
+                    >
+                      <Target className="h-3 w-3" />
+                      <span className="max-w-[140px] truncate">{linkedGoalTitle}</span>
+                    </button>
+                  </>
+                )}
+                {!dueToday && task.status !== 'خلصت' && task.dueDate && reminderOn && task.reminderTime && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="inline-flex items-center gap-1 text-slate-500 dark:text-slate-400">
+                      <Bell className="h-3 w-3 text-accent" />
+                      <span>تنبيه {formatReminderTime(task.reminderTime)}</span>
+                    </span>
+                  </>
+                )}
+                {taskTags.length > 0 && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="inline-flex flex-wrap items-center gap-1.5">
+                      {taskTags.map((tag) => (
+                        <button
+                          key={tag}
+                          type="button"
+                          onClick={() => setTagFilter((prev) => (prev === tag ? 'الكل' : tag))}
+                          className={`font-medium transition-colors hover:underline ${
+                            effectiveTagFilter === tag
+                              ? 'text-accent underline'
+                              : 'text-accent/90 hover:text-accent'
+                          }`}
+                        >
+                          #{tag}
+                        </button>
+                      ))}
+                    </span>
+                  </>
+                )}
+                {task.status === 'خلصت' && preferences.autoArchiveEnabled && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="text-slate-400 dark:text-slate-500">
+                      تُؤرشف تلقائياً بعد{' '}
+                      {daysUntilAutoArchive(
+                        task,
+                        Date.now(),
+                        preferences.autoArchiveDays ?? DEFAULT_AUTO_ARCHIVE_DAYS,
+                      )}{' '}
+                      يوم
+                    </span>
+                  </>
+                )}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() =>
+                setExpandedSubtasksIds((prev) => ({...prev, [task.id]: !prev[task.id]}))
+              }
+              title="الخطوات الفرعية"
+              aria-label="الخطوات الفرعية"
+              className={`inline-flex min-h-[38px] items-center gap-1 rounded-lg px-2 text-xs font-medium transition-colors ${
+                subtasksExpanded || taskSubtasks.length > 0
+                  ? 'bg-slate-100 text-accent dark:bg-slate-700/80'
+                  : 'text-slate-400 hover:bg-slate-100 hover:text-accent dark:hover:bg-slate-700'
+              }`}
+            >
+              <ListChecks className="h-4 w-4" />
+              {taskSubtasks.length > 0 && (
+                <span className="font-mono text-[11px] tabular-nums">
+                  {doneSubtasksCount}/{taskSubtasks.length}
                 </span>
               )}
-            </div>
-            <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-              <span className={`inline-flex items-center gap-1 ${priorityInfo.textClass}`}>
-                <span>{priorityInfo.label}</span>
-              </span>
-              {isHighOpen && (
-                <>
-                  <span aria-hidden="true">·</span>
-                  <span className="font-medium text-red-600 dark:text-red-400">
-                    تنبيه أولوية عالية
-                  </span>
-                </>
-              )}
-              <span aria-hidden="true">·</span>
-              <span
-                className={
-                  overdue
-                    ? 'font-medium text-red-600 dark:text-red-400'
-                    : dueToday
-                      ? 'font-medium text-amber-700 dark:text-amber-400'
-                      : ''
-                }
+            </button>
+            {task.status !== 'خلصت' && (
+              <button
+                type="button"
+                onClick={() => startFocusForTask({id: task.id, title: task.title})}
+                aria-label={`ابدأ جلسة تركيز على ${task.title}`}
+                title="ابدأ مؤقت التركيز (بومودورو)"
+                className="flex min-h-[38px] min-w-[38px] items-center justify-center rounded-lg text-slate-500 hover:bg-accent-soft hover:text-accent dark:hover:bg-slate-700"
               >
-                {overdue
-                  ? `اتأجلت (${formatFriendlyDate(task.dueDate)})`
-                  : formatFriendlyDate(task.dueDate)}
-              </span>
-              {!dueToday && task.status !== 'خلصت' && task.dueDate && reminderOn && task.reminderTime && (
-                <>
-                  <span aria-hidden="true">·</span>
-                  <span className="inline-flex items-center gap-1 text-slate-500 dark:text-slate-400">
-                    <Bell className="h-3 w-3 text-accent" />
-                    <span>تنبيه {formatReminderTime(task.reminderTime)}</span>
-                  </span>
-                </>
-              )}
-              {taskTags.length > 0 && (
-                <>
-                  <span aria-hidden="true">·</span>
-                  <span className="inline-flex flex-wrap items-center gap-1.5">
-                    {taskTags.map((tag) => (
-                      <button
-                        key={tag}
-                        type="button"
-                        onClick={() => setTagFilter((prev) => (prev === tag ? 'الكل' : tag))}
-                        className={`font-medium transition-colors hover:underline ${
-                          effectiveTagFilter === tag
-                            ? 'text-accent underline'
-                            : 'text-accent/90 hover:text-accent'
-                        }`}
-                      >
-                        #{tag}
-                      </button>
-                    ))}
-                  </span>
-                </>
-              )}
-              {task.status === 'خلصت' && preferences.autoArchiveEnabled && (
-                <>
-                  <span aria-hidden="true">·</span>
-                  <span className="text-slate-400 dark:text-slate-500">
-                    تُؤرشف تلقائياً بعد{' '}
-                    {daysUntilAutoArchive(
-                      task,
-                      Date.now(),
-                      preferences.autoArchiveDays ?? DEFAULT_AUTO_ARCHIVE_DAYS,
-                    )}{' '}
-                    يوم
-                  </span>
-                </>
-              )}
-            </p>
+                <Timer className="h-4 w-4" />
+              </button>
+            )}
+            {task.status === 'خلصت' && (
+              <button
+                type="button"
+                onClick={() => archiveTask(task.id)}
+                aria-label={`نقل ${task.title} إلى الأرشيف`}
+                title="نقل إلى الأرشيف"
+                className="flex min-h-[38px] min-w-[38px] items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-accent dark:hover:bg-slate-700"
+              >
+                <Archive className="h-4 w-4" />
+              </button>
+            )}
+            {task.status !== 'خلصت' && task.dueDate && (
+              <button
+                type="button"
+                onClick={() => updateTask(task.id, {reminderEnabled: !reminderOn})}
+                aria-label={reminderOn ? 'كتم تنبيه المهمة' : 'تفعيل تنبيه المهمة'}
+                title={reminderOn ? 'التنبيه مفعّل — اضغط للكتم' : 'التنبيه مقفول — اضغط للتفعيل'}
+                className={`flex min-h-[38px] min-w-[38px] items-center justify-center rounded-lg transition-colors ${
+                  reminderDueToday
+                    ? 'bg-amber-100/80 text-amber-700 hover:bg-amber-200/70 dark:bg-amber-950/50 dark:text-amber-300'
+                    : reminderOn
+                      ? 'text-accent hover:bg-slate-100 dark:hover:bg-slate-700'
+                      : 'text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700'
+                }`}
+              >
+                {reminderOn ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
+              </button>
+            )}
+            <select
+              value={task.status}
+              onChange={(e) => updateTask(task.id, {status: e.target.value as TaskStatus})}
+              aria-label="حالة المهمة"
+              className="min-h-[38px] rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+            >
+              <option value="لسه">لسه</option>
+              <option value="شغال عليها">شغال عليها</option>
+              <option value="خلصت">خلصت</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => startEdit(task)}
+              aria-label="تعديل المهمة"
+              className="flex min-h-[38px] min-w-[38px] items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-accent dark:hover:bg-slate-700"
+            >
+              <Pencil className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => deleteTask(task.id)}
+              aria-label="مسح المهمة"
+              className="flex min-h-[38px] min-w-[38px] items-center justify-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/30"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5">
-          {task.status === 'خلصت' && (
-            <button
-              type="button"
-              onClick={() => archiveTask(task.id)}
-              aria-label={`نقل ${task.title} إلى الأرشيف`}
-              title="نقل إلى الأرشيف"
-              className="flex min-h-[38px] min-w-[38px] items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-accent dark:hover:bg-slate-700"
-            >
-              <Archive className="h-4 w-4" />
-            </button>
-          )}
-          {task.status !== 'خلصت' && task.dueDate && (
-            <button
-              type="button"
-              onClick={() => updateTask(task.id, {reminderEnabled: !reminderOn})}
-              aria-label={reminderOn ? 'كتم تنبيه المهمة' : 'تفعيل تنبيه المهمة'}
-              title={reminderOn ? 'التنبيه مفعّل — اضغط للكتم' : 'التنبيه مقفول — اضغط للتفعيل'}
-              className={`flex min-h-[38px] min-w-[38px] items-center justify-center rounded-lg transition-colors ${
-                reminderDueToday
-                  ? 'bg-amber-100/80 text-amber-700 hover:bg-amber-200/70 dark:bg-amber-950/50 dark:text-amber-300'
-                  : reminderOn
-                    ? 'text-accent hover:bg-slate-100 dark:hover:bg-slate-700'
-                    : 'text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700'
-              }`}
-            >
-              {reminderOn ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
-            </button>
-          )}
-          <select
-            value={task.status}
-            onChange={(e) => updateTask(task.id, {status: e.target.value as TaskStatus})}
-            aria-label="حالة المهمة"
-            className="min-h-[38px] rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-          >
-            <option value="لسه">لسه</option>
-            <option value="شغال عليها">شغال عليها</option>
-            <option value="خلصت">خلصت</option>
-          </select>
-          <button
-            type="button"
-            onClick={() => startEdit(task)}
-            aria-label="تعديل المهمة"
-            className="flex min-h-[38px] min-w-[38px] items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-accent dark:hover:bg-slate-700"
-          >
-            <Pencil className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => deleteTask(task.id)}
-            aria-label="مسح المهمة"
-            className="flex min-h-[38px] min-w-[38px] items-center justify-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/30"
-          >
-            <Trash2 className="h-4 w-4" />
-          </button>
+        {/* Inline Subtasks Drawer */}
+        {subtasksExpanded && (
+          <div className="mt-3 ms-12 space-y-2 rounded-xl border border-slate-200/70 bg-slate-50/70 p-3 dark:border-slate-700/70 dark:bg-slate-900/50">
+            {taskSubtasks.length > 0 && (
+              <div className="space-y-1.5">
+                {taskSubtasks.map((st) => (
+                  <div key={st.id} className="flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleToggleInlineSubtask(task, st.id)}
+                      className="flex min-w-0 flex-1 items-center gap-2 text-start"
+                    >
+                      <span
+                        className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors ${
+                          st.done
+                            ? 'border-emerald-600 bg-emerald-600 text-white'
+                            : 'border-slate-300 bg-white dark:border-slate-600 dark:bg-slate-800'
+                        }`}
+                      >
+                        {st.done && <Check className="h-3 w-3" />}
+                      </span>
+                      <span
+                        className={`truncate text-xs ${
+                          st.done
+                            ? 'text-slate-400 line-through dark:text-slate-500'
+                            : 'text-slate-700 dark:text-slate-200'
+                        }`}
+                      >
+                        {st.title}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteInlineSubtask(task, st.id)}
+                      aria-label={`حذف الخطوة ${st.title}`}
+                      className="p-1 text-slate-400 hover:text-red-600 dark:hover:text-red-400"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex items-center gap-1.5 pt-1">
+              <input
+                type="text"
+                value={inlineSubtaskInputs[task.id] ?? ''}
+                onChange={(e) =>
+                  setInlineSubtaskInputs((prev) => ({...prev, [task.id]: e.target.value}))
+                }
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleAddInlineSubtask(task);
+                  }
+                }}
+                placeholder="أضف خطوة فرعية..."
+                className="min-h-[34px] flex-1 rounded-lg border border-slate-200 bg-white px-2.5 text-xs text-slate-900 outline-none focus:border-accent dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+              />
+              <button
+                type="button"
+                onClick={() => handleAddInlineSubtask(task)}
+                className="min-h-[34px] rounded-lg bg-accent px-3 text-xs font-semibold text-white whitespace-nowrap"
+              >
+                + خطوة
+              </button>
+            </div>
+          </div>
+        )}
         </div>
       </div>
     );
@@ -645,20 +1128,71 @@ export const TasksView: React.FC = () => {
             إجمالي {tasks.length} · النهارده {dueTodayCount} · متأخرة {overdueCount}
           </p>
         </div>
-        {archivedTasks.length > 0 && (
+
+        <div className="flex items-center gap-2">
+          <div className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1 dark:border-slate-700 dark:bg-slate-800">
+            <button
+              type="button"
+              onClick={() => setTasksViewMode('list')}
+              className={`inline-flex min-h-[34px] items-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition-colors whitespace-nowrap ${
+                tasksViewMode === 'list'
+                  ? 'bg-accent text-white'
+                  : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700'
+              }`}
+            >
+              <List className="h-3.5 w-3.5" />
+              <span>القائمة</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveSection('calendar')}
+              className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg px-3 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700 whitespace-nowrap"
+            >
+              <CalendarDays className="h-3.5 w-3.5" />
+              <span>التقويم</span>
+            </button>
+          </div>
+
+          {archivedTasks.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setActiveSection('archive')}
+              className="inline-flex min-h-[36px] items-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:border-accent hover:text-accent dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            >
+              <Archive className="h-3.5 w-3.5 text-accent" />
+              <span>الأرشيف</span>
+              <span className="font-mono text-[11px] tabular-nums text-slate-400">
+                ({archivedTasks.length})
+              </span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {lastRecurringNotice && (
+        <div
+          role="status"
+          className="flex items-center justify-between gap-2 rounded-2xl border border-emerald-200 bg-emerald-50/90 px-4 py-2.5 text-xs font-medium text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-200"
+        >
+          <span className="flex items-center gap-2">
+            <Repeat className="h-4 w-4 shrink-0" />
+            <span>{lastRecurringNotice}</span>
+          </span>
           <button
             type="button"
-            onClick={() => setActiveSection('archive')}
-            className="inline-flex min-h-[36px] items-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:border-accent hover:text-accent dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            onClick={dismissRecurringNotice}
+            aria-label="إغلاق الإشعار"
+            className="rounded-lg p-1 hover:bg-emerald-100 dark:hover:bg-emerald-900/50"
           >
-            <Archive className="h-3.5 w-3.5 text-accent" />
-            <span>الأرشيف</span>
-            <span className="font-mono text-[11px] tabular-nums text-slate-400">
-              ({archivedTasks.length})
-            </span>
+            <X className="h-3.5 w-3.5" />
           </button>
-        )}
-      </div>
+        </div>
+      )}
+
+      {tasksViewMode === 'calendar' ? (
+        <CalendarMonthView onSelectTaskToEdit={startEdit} />
+      ) : (
+        <>
 
       {/* High-Priority Visual Alert */}
       {openHighPriorityTasks.length > 0 && !priorityAlertDismissed && (
@@ -814,6 +1348,99 @@ export const TasksView: React.FC = () => {
           </div>
         </div>
 
+        {/* Recurrence, Goal Link & Optional Subtasks */}
+        <div className="grid grid-cols-1 gap-2.5 border-t border-slate-100 pt-3 dark:border-slate-700 sm:grid-cols-2">
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap">
+              <Repeat className="h-3.5 w-3.5 text-accent" />
+              <span>التكرار:</span>
+            </span>
+            <select
+              value={recurrence}
+              onChange={(e) => setRecurrence(e.target.value as TaskRecurrence)}
+              aria-label="تكرار المهمة"
+              className="min-h-[36px] flex-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs text-slate-900 outline-none focus:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+            >
+              <option value="none">مرة واحدة</option>
+              <option value="daily">يومياً</option>
+              <option value="weekly">أسبوعياً</option>
+              <option value="monthly">شهرياً</option>
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap">
+              <Target className="h-3.5 w-3.5 text-amber-500" />
+              <span>ربط بهدف:</span>
+            </span>
+            <select
+              value={goalId}
+              onChange={(e) => setGoalId(e.target.value)}
+              aria-label="ربط المهمة بهدف أو مشروع"
+              className="min-h-[36px] flex-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs text-slate-900 outline-none focus:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+            >
+              <option value="">بدون هدف مرتبط</option>
+              {goals.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.title} ({g.kind})
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Subtasks Builder (Create) */}
+        <div className="space-y-2 border-t border-slate-100 pt-3 dark:border-slate-700">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap">
+              <ListChecks className="h-3.5 w-3.5 text-accent" />
+              <span>خطوات فرعية (اختياري):</span>
+            </span>
+            <input
+              type="text"
+              value={draftSubtaskInput}
+              onChange={(e) => setDraftSubtaskInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleAddDraftSubtask();
+                }
+              }}
+              placeholder="اكتب خطوة واضغط +..."
+              className="min-h-[34px] flex-1 min-w-[160px] rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs text-slate-900 outline-none focus:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+            />
+            <button
+              type="button"
+              onClick={handleAddDraftSubtask}
+              className="min-h-[34px] rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs font-medium text-slate-700 hover:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 whitespace-nowrap"
+            >
+              + خطوة
+            </button>
+          </div>
+          {draftSubtasks.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {draftSubtasks.map((st) => (
+                <span
+                  key={st.id}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                >
+                  <span>{st.title}</span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDraftSubtasks((prev) => prev.filter((item) => item.id !== st.id))
+                    }
+                    aria-label={`حذف ${st.title}`}
+                    className="text-slate-400 hover:text-red-500"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
         {formError && (
           <p className="text-xs font-medium text-red-600 dark:text-red-400">{formError}</p>
         )}
@@ -855,7 +1482,7 @@ export const TasksView: React.FC = () => {
 
           <button
             type="submit"
-            className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl bg-accent px-5 text-sm font-semibold text-white"
+            className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl bg-accent px-5 text-sm font-semibold text-white whitespace-nowrap"
           >
             <Plus className="h-4 w-4" />
             <span>ضيف مهمة</span>
@@ -887,105 +1514,64 @@ export const TasksView: React.FC = () => {
             ))}
           </div>
 
-          <button
-            type="button"
-            onClick={() => setGroupByTag((v) => !v)}
-            className={`inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition-colors ${
-              groupByTag
-                ? 'border-accent bg-accent-soft text-accent'
-                : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
-            }`}
-          >
-            <Layers className="h-3.5 w-3.5" />
-            <span>تجميع بالتصنيف</span>
-          </button>
-        </div>
-
-        {/* Tag Filter Bar */}
-        <div
-          role="region"
-          aria-label="شريط تصفية المهام بالتصنيف"
-          className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2.5 dark:border-slate-700"
-        >
-          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300">
-            <Tag className="h-3.5 w-3.5 text-accent" />
-            <span>فلتر بالتصنيف:</span>
-          </span>
-
-          <div className="flex flex-1 flex-wrap items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             <button
               type="button"
-              onClick={() => setTagFilter('الكل')}
-              aria-pressed={effectiveTagFilter === 'الكل'}
-              className={`inline-flex min-h-[36px] items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 text-xs font-medium transition-colors ${
-                effectiveTagFilter === 'الكل'
-                  ? 'border-slate-900 bg-slate-900 text-white dark:border-slate-100 dark:bg-slate-100 dark:text-slate-900'
+              onClick={toggleSelectionMode}
+              aria-pressed={selectionMode}
+              className={`inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition-colors whitespace-nowrap ${
+                selectionMode
+                  ? 'border-accent bg-accent text-white'
                   : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
               }`}
             >
-              <span>الكل</span>
-              <span className="font-mono text-[11px] opacity-80 tabular-nums">
-                ({tasksMatchingNonTagFilters.length})
-              </span>
+              {selectionMode ? (
+                <CheckSquare className="h-3.5 w-3.5" />
+              ) : (
+                <Square className="h-3.5 w-3.5" />
+              )}
+              <span>تحديد متعدد</span>
             </button>
 
-            {availableTags.map((tag) => {
-              const count = tagCounts.counts.get(tag) ?? 0;
-              const isActive = effectiveTagFilter === tag;
-              return (
-                <button
-                  key={tag}
-                  type="button"
-                  onClick={() => setTagFilter((prev) => (prev === tag ? 'الكل' : tag))}
-                  aria-pressed={isActive}
-                  className={`inline-flex min-h-[36px] items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 text-xs font-medium transition-colors ${
-                    isActive
-                      ? 'border-accent bg-accent text-white'
-                      : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
-                  }`}
-                >
-                  <span>{tag}</span>
-                  <span className="font-mono text-[11px] opacity-80 tabular-nums">
-                    ({count})
-                  </span>
-                </button>
-              );
-            })}
-
-            {(tagCounts.untagged > 0 || effectiveTagFilter === 'من غير تصنيف') && (
-              <button
-                type="button"
-                onClick={() =>
-                  setTagFilter((prev) => (prev === 'من غير تصنيف' ? 'الكل' : 'من غير تصنيف'))
-                }
-                aria-pressed={effectiveTagFilter === 'من غير تصنيف'}
-                className={`inline-flex min-h-[36px] items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 text-xs font-medium transition-colors ${
-                  effectiveTagFilter === 'من غير تصنيف'
-                    ? 'border-accent bg-accent text-white'
-                    : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
-                }`}
-              >
-                <span>من غير تصنيف</span>
-                <span className="font-mono text-[11px] opacity-80 tabular-nums">
-                  ({tagCounts.untagged})
-                </span>
-              </button>
-            )}
-          </div>
-
-          {hasActiveFilters && (
             <button
               type="button"
-              onClick={resetAllFilters}
-              className="inline-flex min-h-[34px] items-center gap-1 whitespace-nowrap rounded-lg px-2.5 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-100"
+              onClick={() => setGroupByTag((v) => !v)}
+              className={`inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition-colors whitespace-nowrap ${
+                groupByTag
+                  ? 'border-accent bg-accent-soft text-accent'
+                  : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
+              }`}
             >
-              <X className="h-3.5 w-3.5" />
-              <span>مسح الفلاتر</span>
+              <Layers className="h-3.5 w-3.5" />
+              <span>تجميع بالتصنيف</span>
             </button>
-          )}
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2.5 dark:border-slate-700">
+        {/* Compact Filter Dropdowns Row (Tag + Priority side-by-side) & Search */}
+        <div
+          role="region"
+          aria-label="فلاتر المهام"
+          className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2.5 dark:border-slate-700"
+        >
+          <FilterDropdown
+            label="التصنيف"
+            value={effectiveTagFilter}
+            options={tagDropdownOptions}
+            onChange={setTagFilter}
+            icon={<Tag className="h-3.5 w-3.5 text-accent" />}
+            ariaLabel="فلتر بالتصنيف"
+          />
+
+          <FilterDropdown
+            label="الأولوية"
+            value={priorityFilter}
+            options={priorityDropdownOptions}
+            onChange={(val) => setPriorityFilter(val as 'الكل' | TaskPriority)}
+            icon={<Flag className="h-3.5 w-3.5 text-accent" />}
+            ariaLabel="فلتر بالأولوية"
+          />
+
           <div className="relative min-w-[180px] flex-1">
             <Search className="pointer-events-none absolute top-1/2 start-3 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
             <input
@@ -997,51 +1583,141 @@ export const TasksView: React.FC = () => {
             />
           </div>
 
-          <div
-            role="group"
-            aria-label="تصفية بالأولوية"
-            className="flex flex-wrap items-center gap-1.5"
-          >
+          {hasActiveFilters && (
             <button
               type="button"
-              onClick={() => setPriorityFilter('الكل')}
-              aria-pressed={priorityFilter === 'الكل'}
-              className={`min-h-[36px] whitespace-nowrap rounded-lg border px-2.5 text-xs font-medium transition-colors ${
-                priorityFilter === 'الكل'
-                  ? 'border-slate-900 bg-slate-900 text-white dark:border-slate-100 dark:bg-slate-100 dark:text-slate-900'
-                  : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
-              }`}
+              onClick={resetAllFilters}
+              className="inline-flex min-h-[38px] items-center gap-1 whitespace-nowrap rounded-xl px-2.5 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-100"
             >
-              كل الأولويات
+              <X className="h-3.5 w-3.5" />
+              <span>مسح الفلاتر</span>
             </button>
-            {PRIORITY_ORDER.map((level) => {
-              const meta = PRIORITY_META[level];
-              const Icon = meta.icon;
-              const isActive = priorityFilter === level;
-              return (
+          )}
+        </div>
+
+        {/* Multi-Select Bulk Action Bar */}
+        {selectionMode && (
+          <div className="flex flex-wrap items-center justify-between gap-2.5 border-t border-slate-100 pt-2.5 dark:border-slate-700">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-semibold text-slate-800 tabular-nums dark:text-slate-100">
+                المحدد: {effectiveSelectedIds.length} من {filteredTasks.length}
+              </span>
+              <button
+                type="button"
+                onClick={handleToggleSelectAllFiltered}
+                className="min-h-[34px] rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs font-medium text-slate-700 hover:border-accent hover:text-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              >
+                {filteredTasks.length > 0 &&
+                filteredTasks.every((t) => selectedIdSet.has(t.id))
+                  ? 'إلغاء تحديد الكل'
+                  : 'تحديد الكل'}
+              </button>
+            </div>
+
+            {effectiveSelectedIds.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                {availableTags.length > 0 && (
+                  <div className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-900">
+                    <select
+                      value={bulkTagChoice || availableTags[0]}
+                      onChange={(e) => setBulkTagChoice(e.target.value)}
+                      aria-label="اختيار تصنيف جماعي"
+                      className="min-h-[30px] bg-transparent px-2 text-xs text-slate-700 outline-none dark:text-slate-200"
+                    >
+                      {availableTags.map((tag) => (
+                        <option
+                          key={tag}
+                          value={tag}
+                          className="bg-white text-slate-900 dark:bg-slate-900 dark:text-slate-100"
+                        >
+                          #{tag}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={handleBulkApplyTag}
+                      className="min-h-[30px] rounded-lg bg-accent px-2.5 text-xs font-semibold text-white whitespace-nowrap"
+                    >
+                      تصنيف
+                    </button>
+                  </div>
+                )}
+
                 <button
-                  key={level}
                   type="button"
-                  onClick={() => setPriorityFilter((prev) => (prev === level ? 'الكل' : level))}
-                  aria-pressed={isActive}
-                  className={`inline-flex min-h-[36px] items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 text-xs font-medium transition-colors ${
-                    isActive
-                      ? meta.activeButtonClass
-                      : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
-                  }`}
+                  onClick={handleBulkArchive}
+                  className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-700 hover:border-accent hover:text-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
                 >
-                  <span className={`h-2 w-2 rounded-full ${meta.dotClass}`} />
-                  <Icon className="h-3.5 w-3.5" />
-                  <span>{meta.label}</span>
-                  <span className="font-mono text-[11px] opacity-75 tabular-nums">
-                    ({priorityCounts[level]})
-                  </span>
+                  <Archive className="h-3.5 w-3.5" />
+                  <span>أرشفة ({effectiveSelectedIds.length})</span>
                 </button>
-              );
-            })}
+
+                {confirmBulkDelete ? (
+                  <div className="inline-flex items-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-2.5 py-1 dark:border-red-900/60 dark:bg-red-950/40">
+                    <button
+                      type="button"
+                      onClick={handleBulkDelete}
+                      className="min-h-[28px] rounded-lg bg-red-600 px-2.5 text-xs font-semibold text-white hover:bg-red-700"
+                    >
+                      تأكيد حذف ({effectiveSelectedIds.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmBulkDelete(false)}
+                      className="text-xs font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300"
+                    >
+                      إلغاء
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmBulkDelete(true)}
+                    className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border border-red-200 px-3 text-xs font-medium text-red-600 hover:bg-red-50 dark:border-red-900/60 dark:text-red-400 dark:hover:bg-red-950/30"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>حذف ({effectiveSelectedIds.length})</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Bulk / Quick Swipe Feedback Toast */}
+      {(swipeNotice || bulkFeedback) && (
+        <div
+          role="status"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-accent/30 bg-accent-soft/70 px-4 py-2.5 text-xs font-medium text-slate-800 dark:bg-slate-800 dark:text-slate-100"
+        >
+          <span>{swipeNotice ? swipeNotice.message : bulkFeedback}</span>
+          <div className="flex items-center gap-2">
+            {swipeNotice && (
+              <button
+                type="button"
+                onClick={swipeNotice.undo}
+                className="inline-flex items-center gap-1 rounded-lg bg-white px-2.5 py-1 text-xs font-semibold text-accent shadow-xs hover:bg-slate-50 dark:bg-slate-900"
+              >
+                <RotateCcw className="h-3 w-3" />
+                <span>تراجع</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setSwipeNotice(null);
+                setBulkFeedback(null);
+              }}
+              aria-label="إغلاق الإشعار"
+              className="rounded-lg p-1 text-slate-500 hover:bg-white/70 dark:hover:bg-slate-700"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Tasks List or Grouped by Tag */}
       {filteredTasks.length === 0 ? (
@@ -1090,6 +1766,8 @@ export const TasksView: React.FC = () => {
           {filteredTasks.map(renderTaskRow)}
         </div>
       )}
+        </>
+      )}
 
       {/* Edit Task Modal */}
       {editingTask && (
@@ -1100,7 +1778,7 @@ export const TasksView: React.FC = () => {
           <form
             onSubmit={handleSaveEdit}
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-xl dark:border-slate-700 dark:bg-slate-900"
+            className="max-h-[90vh] w-full max-w-md space-y-4 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-5 shadow-xl dark:border-slate-700 dark:bg-slate-900"
           >
             <div className="flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
               <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">تعديل المهمة</h2>
@@ -1270,6 +1948,129 @@ export const TasksView: React.FC = () => {
                     className="min-h-[36px] rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
                   >
                     + ضيف
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                    التكرار
+                  </label>
+                  <select
+                    value={editRecurrence}
+                    onChange={(e) => setEditRecurrence(e.target.value as TaskRecurrence)}
+                    className="min-h-[40px] w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  >
+                    <option value="none">مرة واحدة</option>
+                    <option value="daily">يومياً</option>
+                    <option value="weekly">أسبوعياً</option>
+                    <option value="monthly">شهرياً</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                    ربط بهدف / مشروع
+                  </label>
+                  <select
+                    value={editGoalId}
+                    onChange={(e) => setEditGoalId(e.target.value)}
+                    className="min-h-[40px] w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  >
+                    <option value="">بدون هدف مرتبط</option>
+                    {goals.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.title} ({g.kind})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                  الخطوات الفرعية ({editSubtasks.length})
+                </label>
+                {editSubtasks.length > 0 && (
+                  <div className="mb-2 space-y-1.5">
+                    {editSubtasks.map((st) => (
+                      <div key={st.id} className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-800">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditSubtasks((prev) =>
+                              prev.map((item) =>
+                                item.id === st.id ? {...item, done: !item.done} : item,
+                              ),
+                            )
+                          }
+                          className="flex min-w-0 flex-1 items-center gap-2 text-start text-xs"
+                        >
+                          <span
+                            className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                              st.done
+                                ? 'border-emerald-600 bg-emerald-600 text-white'
+                                : 'border-slate-300 bg-white dark:border-slate-600 dark:bg-slate-900'
+                            }`}
+                          >
+                            {st.done && <Check className="h-3 w-3" />}
+                          </span>
+                          <span
+                            className={`truncate ${
+                              st.done ? 'text-slate-400 line-through' : 'text-slate-800 dark:text-slate-100'
+                            }`}
+                          >
+                            {st.title}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditSubtasks((prev) => prev.filter((item) => item.id !== st.id))
+                          }
+                          className="text-slate-400 hover:text-red-500"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={editSubtaskInput}
+                    onChange={(e) => setEditSubtaskInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const clean = editSubtaskInput.trim();
+                        if (!clean) return;
+                        setEditSubtasks((prev) => [
+                          ...prev,
+                          {id: createSimpleId(), title: clean, done: false},
+                        ]);
+                        setEditSubtaskInput('');
+                      }
+                    }}
+                    placeholder="أضف خطوة فرعية..."
+                    className="min-h-[36px] flex-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs text-slate-900 outline-none focus:border-accent dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const clean = editSubtaskInput.trim();
+                      if (!clean) return;
+                      setEditSubtasks((prev) => [
+                        ...prev,
+                        {id: createSimpleId(), title: clean, done: false},
+                      ]);
+                      setEditSubtaskInput('');
+                    }}
+                    className="min-h-[36px] rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 whitespace-nowrap"
+                  >
+                    + خطوة
                   </button>
                 </div>
               </div>

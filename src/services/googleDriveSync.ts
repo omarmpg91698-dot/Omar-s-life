@@ -1,5 +1,5 @@
 import {DEFAULT_PREFERENCES, parseAndValidateBackup} from '../storage/localStore';
-import type {GoalProjectItem, NoteItem, OmarsLifeStore, TaskItem} from '../types';
+import type {DocumentItem, GoalProjectItem, NoteItem, OmarsLifeStore, TaskItem} from '../types';
 
 export const DRIVE_SYNC_FILENAME = 'omars-life-sync.json';
 const DRIVE_FILES_API = 'https://www.googleapis.com/drive/v3/files';
@@ -196,12 +196,50 @@ export function mergeOmarsLifeStores(
 ): StoreMergeResult {
   const tasksMerge = mergeByUpdatedAt<TaskItem>(local.tasks, remote.tasks);
   const notesMerge = mergeByUpdatedAt<NoteItem>(local.notes, remote.notes);
+  const documentsMerge = mergeByUpdatedAt<DocumentItem>(
+    local.documents ?? [],
+    remote.documents ?? [],
+  );
   const goalsMerge = mergeByUpdatedAt<GoalProjectItem>(local.goals, remote.goals);
+  const habitsMerge = mergeByUpdatedAt(local.habits ?? [], remote.habits ?? []);
+  const memoriesMerge = mergeByUpdatedAt(
+    local.assistantMemories ?? [],
+    remote.assistantMemories ?? [],
+  );
+
+  const focusMap = new Map(
+    [...(local.focusSessions ?? []), ...(remote.focusSessions ?? [])].map((s) => [s.id, s]),
+  );
+  const mergedFocusSessions = Array.from(focusMap.values()).sort(
+    (a, b) => b.completedAt - a.completedAt,
+  );
+
+  const messagesMap = new Map(
+    [...(local.assistantMessages ?? []), ...(remote.assistantMessages ?? [])].map((m) => [m.id, m]),
+  );
+  const mergedMessages = Array.from(messagesMap.values())
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .slice(-80);
+
+  const localProfileUpdated = local.assistantProfile?.updatedAt ?? 0;
+  const remoteProfileUpdated = remote.assistantProfile?.updatedAt ?? 0;
+  const mergedProfile =
+    remoteProfileUpdated > localProfileUpdated
+      ? remote.assistantProfile
+      : local.assistantProfile ?? remote.assistantProfile;
 
   const localIsEmpty =
-    local.tasks.length === 0 && local.notes.length === 0 && local.goals.length === 0;
+    local.tasks.length === 0 &&
+    local.notes.length === 0 &&
+    (local.documents?.length ?? 0) === 0 &&
+    local.goals.length === 0 &&
+    (local.habits?.length ?? 0) === 0;
   const remoteHasData =
-    remote.tasks.length > 0 || remote.notes.length > 0 || remote.goals.length > 0;
+    remote.tasks.length > 0 ||
+    remote.notes.length > 0 ||
+    (remote.documents?.length ?? 0) > 0 ||
+    remote.goals.length > 0 ||
+    (remote.habits?.length ?? 0) > 0;
 
   const mergedTags = Array.from(
     new Set([
@@ -217,7 +255,13 @@ export function mergeOmarsLifeStores(
       version: 1,
       tasks: tasksMerge.items,
       notes: notesMerge.items,
+      documents: documentsMerge.items,
       goals: goalsMerge.items,
+      habits: habitsMerge.items,
+      focusSessions: mergedFocusSessions,
+      assistantProfile: mergedProfile,
+      assistantMemories: memoriesMerge.items,
+      assistantMessages: mergedMessages,
       preferences: {
         ...DEFAULT_PREFERENCES,
         ...basePrefs,

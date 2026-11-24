@@ -1,6 +1,6 @@
-import type {GoalProjectItem, NoteItem, TaskItem} from '../types';
+import type {DocumentItem, GoalProjectItem, NoteItem, TaskItem} from '../types';
 
-export type SearchResultKind = 'task' | 'note' | 'goal';
+export type SearchResultKind = 'task' | 'note' | 'document' | 'goal';
 export type SearchFilterKind = 'all' | SearchResultKind;
 
 export interface GlobalSearchResult {
@@ -12,6 +12,7 @@ export interface GlobalSearchResult {
   updatedAt: number;
   task?: TaskItem;
   note?: NoteItem;
+  document?: DocumentItem;
   goal?: GoalProjectItem;
 }
 
@@ -21,6 +22,7 @@ export interface GlobalSearchOutput {
     all: number;
     task: number;
     note: number;
+    document: number;
     goal: number;
   };
 }
@@ -80,6 +82,7 @@ export function searchAllLifeItems(
   data: {
     tasks: TaskItem[];
     notes: NoteItem[];
+    documents?: DocumentItem[];
     goals: GoalProjectItem[];
   },
   rawQuery: string,
@@ -89,7 +92,7 @@ export function searchAllLifeItems(
   if (!normalizedQuery) {
     return {
       results: [],
-      counts: {all: 0, task: 0, note: 0, goal: 0},
+      counts: {all: 0, task: 0, note: 0, document: 0, goal: 0},
     };
   }
 
@@ -132,6 +135,26 @@ export function searchAllLifeItems(
     }
   }
 
+  for (const doc of data.documents ?? []) {
+    const titleNorm = normalizeSearchText(doc.title);
+    const notesNorm = normalizeSearchText(doc.notes ?? '');
+    const metaNorm = normalizeSearchText(
+      [doc.category, doc.documentNumber ?? '', doc.expiryDate].join(' '),
+    );
+    const score = scoreFieldMatch(tokens, titleNorm, notesNorm, metaNorm);
+    if (score > 0) {
+      allMatches.push({
+        id: doc.id,
+        kind: 'document',
+        title: doc.title,
+        snippet: makeSnippet(doc.notes || doc.documentNumber || ''),
+        score,
+        updatedAt: doc.updatedAt,
+        document: doc,
+      });
+    }
+  }
+
   for (const goal of data.goals) {
     const titleNorm = normalizeSearchText(goal.title);
     const descNorm = normalizeSearchText(goal.description);
@@ -157,10 +180,12 @@ export function searchAllLifeItems(
 
   let taskCount = 0;
   let noteCount = 0;
+  let documentCount = 0;
   let goalCount = 0;
   for (const item of allMatches) {
     if (item.kind === 'task') taskCount += 1;
     else if (item.kind === 'note') noteCount += 1;
+    else if (item.kind === 'document') documentCount += 1;
     else goalCount += 1;
   }
 
@@ -173,6 +198,7 @@ export function searchAllLifeItems(
       all: allMatches.length,
       task: taskCount,
       note: noteCount,
+      document: documentCount,
       goal: goalCount,
     },
   };

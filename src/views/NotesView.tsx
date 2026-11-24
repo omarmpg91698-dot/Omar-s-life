@@ -3,6 +3,8 @@ import {
   Camera,
   ImagePlus,
   Pencil,
+  Pin,
+  PinOff,
   Plus,
   RefreshCw,
   Search,
@@ -31,6 +33,7 @@ export const NotesView: React.FC = () => {
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState<NoteCategory>('شخصي');
   const [content, setContent] = useState('');
+  const [pinned, setPinned] = useState(false);
   const [images, setImages] = useState<NoteImage[]>([]);
   const [processingImages, setProcessingImages] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -63,6 +66,7 @@ export const NotesView: React.FC = () => {
   const [editTitle, setEditTitle] = useState('');
   const [editCategory, setEditCategory] = useState<NoteCategory>('شخصي');
   const [editContent, setEditContent] = useState('');
+  const [editPinned, setEditPinned] = useState(false);
   const [editImages, setEditImages] = useState<NoteImage[]>([]);
   const [editError, setEditError] = useState('');
 
@@ -251,9 +255,11 @@ export const NotesView: React.FC = () => {
       content: content.trim(),
       category,
       images,
+      pinned,
     });
     setTitle('');
     setContent('');
+    setPinned(false);
     setImages([]);
   };
 
@@ -262,6 +268,7 @@ export const NotesView: React.FC = () => {
     setEditTitle(note.title);
     setEditCategory(note.category);
     setEditContent(note.content);
+    setEditPinned(Boolean(note.pinned));
     setEditImages(note.images ?? []);
     setEditError('');
   };
@@ -281,6 +288,7 @@ export const NotesView: React.FC = () => {
           : `صورة مرفقة (${editImages.length})`),
       category: editCategory,
       content: editContent.trim(),
+      pinned: editPinned,
       images: editImages,
     });
     setEditingNote(null);
@@ -292,7 +300,8 @@ export const NotesView: React.FC = () => {
       const q = searchQuery.trim().toLowerCase();
       if (!q) return true;
       return n.title.toLowerCase().includes(q) || n.content.toLowerCase().includes(q);
-    });
+    })
+    .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
 
   return (
     <div className="space-y-5">
@@ -420,6 +429,20 @@ export const NotesView: React.FC = () => {
               <Camera className="h-4 w-4 text-accent" />
               <span>التقاط صورة</span>
             </button>
+
+            <button
+              type="button"
+              onClick={() => setPinned((v) => !v)}
+              aria-pressed={pinned}
+              className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border px-3 text-xs font-medium transition-colors ${
+                pinned
+                  ? 'border-accent bg-accent-soft text-accent'
+                  : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
+              }`}
+            >
+              <Pin className="h-3.5 w-3.5" />
+              <span>{pinned ? 'مثبّتة فوق' : 'تثبيت فوق'}</span>
+            </button>
           </div>
 
           <button
@@ -482,15 +505,35 @@ export const NotesView: React.FC = () => {
                 className={`flex flex-col justify-between rounded-2xl border bg-white p-4 transition-all dark:bg-slate-800/90 ${
                   highlightedNoteId === note.id
                     ? 'border-accent ring-2 ring-accent/40'
-                    : 'border-slate-200/80 dark:border-slate-800'
+                    : note.pinned
+                      ? 'border-accent/60 bg-accent-soft/20 dark:border-accent/50'
+                      : 'border-slate-200/80 dark:border-slate-800'
                 }`}
               >
                 <div>
                   <div className="flex items-start justify-between gap-2">
-                    <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                      {note.title}
-                    </h3>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      {note.pinned && (
+                        <Pin className="h-3.5 w-3.5 shrink-0 text-accent" aria-label="ملاحظة مثبّتة" />
+                      )}
+                      <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100 truncate">
+                        {note.title}
+                      </h3>
+                    </div>
                     <div className="flex shrink-0 items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => updateNote(note.id, {pinned: !note.pinned})}
+                        aria-label={note.pinned ? 'إلغاء تثبيت الملاحظة' : 'تثبيت الملاحظة في الأعلى'}
+                        title={note.pinned ? 'إلغاء التثبيت' : 'تثبيت فوق'}
+                        className={`flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg transition-colors ${
+                          note.pinned
+                            ? 'bg-accent-soft text-accent'
+                            : 'text-slate-400 hover:bg-slate-100 hover:text-accent dark:hover:bg-slate-700'
+                        }`}
+                      >
+                        {note.pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
+                      </button>
                       <button
                         type="button"
                         onClick={() => openEdit(note)}
@@ -510,6 +553,7 @@ export const NotesView: React.FC = () => {
                     </div>
                   </div>
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    {note.pinned && <span className="font-semibold text-accent">مثبّتة · </span>}
                     {note.category} ·{' '}
                     {new Intl.DateTimeFormat('ar-EG', {
                       day: 'numeric',
@@ -638,6 +682,19 @@ export const NotesView: React.FC = () => {
                   >
                     <Camera className="h-3.5 w-3.5 text-accent" />
                     <span>التقاط صورة</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditPinned((v) => !v)}
+                    aria-pressed={editPinned}
+                    className={`inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border px-3 text-xs font-medium ${
+                      editPinned
+                        ? 'border-accent bg-accent-soft text-accent'
+                        : 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200'
+                    }`}
+                  >
+                    <Pin className="h-3.5 w-3.5" />
+                    <span>{editPinned ? 'مثبّتة فوق' : 'تثبيت فوق'}</span>
                   </button>
                 </div>
 

@@ -4,21 +4,33 @@ import {
   Bell,
   BellOff,
   BellRing,
+  Bot,
   Calendar,
+  CalendarDays,
   CheckCircle2,
   CheckSquare,
+  CloudUpload,
   FileText,
   Plus,
   Target,
+  Timer,
+  TrendingUp,
   X,
 } from 'lucide-react';
 import {DayPlannerTimeline} from '../components/DayPlannerTimeline';
+import {FocusTimerWidget} from '../components/FocusTimerWidget';
 import {GlobalSearchBar} from '../components/GlobalSearchBar';
+import {HabitTrackerCard} from '../components/HabitTrackerCard';
 import {SmartTagSuggestionsBar} from '../components/SmartTagSuggestionsBar';
 import {TagsDistributionChart} from '../components/TagsDistributionChart';
 import {WeatherWidget} from '../components/WeatherWidget';
 import {WeeklyTasksDashboard} from '../components/WeeklyTasksDashboard';
+import {useDriveSync} from '../context/DriveSyncContext';
 import {useLife} from '../context/LifeContext';
+import {evaluateWeeklyDriveBackupReminder} from '../storage/documentsAndReminders';
+import {computeWeeklyTaskStats} from '../storage/weeklyAnalytics';
+import {resolveGoalPalette} from '../storage/goalTheme';
+import {computeGoalLinkedProgress} from '../storage/productivityUtils';
 import {
   formatFriendlyDate,
   formatReminderTime,
@@ -43,8 +55,11 @@ type QuickActionKind = 'task' | 'note' | 'goal' | null;
 
 const NOTE_CATEGORIES: NoteCategory[] = ['شخصي', 'شغل', 'أفكار', 'حاجات مهمة'];
 
+const DRIVE_REMINDER_SNOOZE_KEY = 'omars_life_drive_reminder_snooze_until';
+
 export const HomeView: React.FC = () => {
   const {
+    store,
     tasks,
     allTasks,
     goals,
@@ -55,7 +70,19 @@ export const HomeView: React.FC = () => {
     addTaskTag,
     updateTask,
     setActiveSection,
+    setTasksViewMode,
+    startFocusForTask,
   } = useLife();
+  const {needsAuth, lastSyncedAt, busyAction, requestSmartSync} = useDriveSync();
+  const [driveReminderSnoozedUntil, setDriveReminderSnoozedUntil] = useState<number | null>(() => {
+    try {
+      const saved = localStorage.getItem(DRIVE_REMINDER_SNOOZE_KEY);
+      const parsed = saved ? Number(saved) : NaN;
+      return Number.isFinite(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  });
   const [quickAction, setQuickAction] = useState<QuickActionKind>(null);
   const [quickFeedback, setQuickFeedback] = useState<{
     message: string;
@@ -124,6 +151,31 @@ export const HomeView: React.FC = () => {
   const dueTodayOrOverdue = [...overdueTasks, ...todayTasks];
   const upcomingTasks = tasks.filter((t) => isTaskUpcoming(t, todayIso));
   const completedTasks = tasks.filter((t) => t.status === 'خلصت');
+
+  const weeklySummary = useMemo(
+    () => computeWeeklyTaskStats(allTasks, todayIso, 'current_week'),
+    [allTasks, todayIso],
+  );
+
+  const driveBackupReminder = useMemo(
+    () =>
+      evaluateWeeklyDriveBackupReminder({
+        lastSyncedAt,
+        store,
+        snoozedUntil: driveReminderSnoozedUntil,
+      }),
+    [lastSyncedAt, store, driveReminderSnoozedUntil],
+  );
+
+  const snoozeDriveBackupReminder = () => {
+    const until = Date.now() + 24 * 60 * 60 * 1000;
+    setDriveReminderSnoozedUntil(until);
+    try {
+      localStorage.setItem(DRIVE_REMINDER_SNOOZE_KEY, String(until));
+    } catch {
+      // Ignore storage errors
+    }
+  };
 
   const hour = new Date().getHours();
   const greetingText =
@@ -296,19 +348,30 @@ export const HomeView: React.FC = () => {
       {/* Top Operational Row: Welcome & Quick Shortcuts + Live Weather Widget */}
       <div className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-12">
         <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-slate-800/90 sm:p-6 lg:col-span-8">
-        <div>
-          <p className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-            <Calendar className="h-3.5 w-3.5 text-accent" />
-            <span>{formattedToday}</span>
-          </p>
-          <h1 className="mt-1.5 text-2xl font-bold text-slate-900 dark:text-slate-100">
-            {greetingText}
-          </h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-            {dueTodayOrOverdue.length === 0
-              ? 'يومك فاضي وهادي لحد دلوقتي. عايز تفتكر إيه النهارده؟'
-              : `عندك ${dueTodayOrOverdue.length} مهام محتاجة تركيزك النهارده.`}
-          </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+              <Calendar className="h-3.5 w-3.5 text-accent" />
+              <span>{formattedToday}</span>
+            </p>
+            <h1 className="mt-1.5 text-2xl font-bold text-slate-900 dark:text-slate-100">
+              {greetingText}
+            </h1>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+              {dueTodayOrOverdue.length === 0
+                ? 'يومك فاضي وهادي لحد دلوقتي. عايز تفتكر إيه النهارده؟'
+                : `عندك ${dueTodayOrOverdue.length} مهام محتاجة تركيزك النهارده.`}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setActiveSection('assistant')}
+            className="inline-flex min-h-[42px] shrink-0 items-center gap-2 whitespace-nowrap rounded-xl bg-accent px-4 text-xs font-semibold text-white transition-colors"
+          >
+            <Bot className="h-4 w-4 shrink-0" />
+            <span>اسأل مساعدك الشخصي</span>
+          </button>
         </div>
 
         {/* Quick Shortcuts Strip */}
@@ -764,6 +827,98 @@ export const HomeView: React.FC = () => {
         </button>
       </div>
 
+      {/* Automatic Weekly Google Drive Backup Reminder */}
+      {driveBackupReminder.shouldRemind && (
+        <section
+          role="status"
+          aria-label="تذكير النسخ الاحتياطي الأسبوعي على Google Drive"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-200/90 bg-amber-50/85 px-4 py-3.5 dark:border-amber-900/60 dark:bg-amber-950/30"
+        >
+          <div className="flex items-start gap-2.5">
+            <CloudUpload className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div>
+              <p className="text-xs font-semibold text-amber-950 sm:text-sm dark:text-amber-100">
+                تذكير أسبوعي: حان وقت عمل نسخة احتياطية على Google Drive
+              </p>
+              <p className="mt-0.5 text-xs text-amber-800/90 dark:text-amber-200/85">
+                {driveBackupReminder.neverSynced
+                  ? 'عدّى أسبوع من غير ما تعمل نسخة احتياطية على Google Drive. احفظ بياناتك عشان تفضل بأمان.'
+                  : `عدّى ${driveBackupReminder.daysSinceLastSync} يوم من آخر مزامنة مع Google Drive.`}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={busyAction !== null}
+              onClick={() => {
+                if (!needsAuth) {
+                  void requestSmartSync();
+                } else {
+                  setActiveSection('settings');
+                }
+              }}
+              className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl bg-accent px-3.5 text-xs font-semibold text-white disabled:opacity-60"
+            >
+              <CloudUpload className="h-3.5 w-3.5" />
+              <span>{needsAuth ? 'افتح مزامنة Drive' : 'اعمل نسخة دلوقتي'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={snoozeDriveBackupReminder}
+              className="min-h-[36px] rounded-xl border border-amber-300/80 bg-white/80 px-3 text-xs font-medium text-amber-900 hover:bg-white dark:border-amber-800/60 dark:bg-slate-900/60 dark:text-amber-200"
+            >
+              فكّرني بكرة
+            </button>
+          </div>
+        </section>
+      )}
+
+      {/* Simple Weekly Summary Strip */}
+      <section
+        aria-label="ملخص الأسبوع"
+        className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-slate-800/90"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-accent" />
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              ملخص الأسبوع ده
+            </h2>
+          </div>
+          <div className="flex items-center gap-3 text-xs tabular-nums">
+            <span className="text-slate-600 dark:text-slate-300">
+              خلصت{' '}
+              <strong className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                {weeklySummary.weeklyCompleted}
+              </strong>{' '}
+              من{' '}
+              <strong className="font-mono font-semibold text-slate-900 dark:text-slate-100">
+                {weeklySummary.weeklyTotal}
+              </strong>{' '}
+              مهمة
+            </span>
+            <span className="rounded-lg bg-accent-soft px-2 py-0.5 font-mono text-xs font-bold text-accent">
+              {weeklySummary.weeklyPercent}%
+            </span>
+          </div>
+        </div>
+
+        <div className="mt-2.5 h-2 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700/80">
+          <div
+            className="h-full rounded-full bg-accent transition-all duration-300"
+            style={{width: `${weeklySummary.weeklyPercent}%`}}
+          />
+        </div>
+      </section>
+
+      {/* Focus Timer (Pomodoro) & Daily Habit Tracker */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <FocusTimerWidget variant="card" />
+        <HabitTrackerCard />
+      </div>
+
       {/* Day Planner Drag & Drop Timeline */}
       <DayPlannerTimeline />
 
@@ -794,13 +949,26 @@ export const HomeView: React.FC = () => {
               <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
                 مهام النهارده
               </h2>
-              <button
-                type="button"
-                onClick={() => setActiveSection('tasks')}
-                className="text-xs font-medium text-accent hover:underline"
-              >
-                كل المهام
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setActiveSection('calendar')}
+                  className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-accent dark:text-slate-300"
+                >
+                  <CalendarDays className="h-3.5 w-3.5 text-accent" />
+                  <span>التقويم</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTasksViewMode('list');
+                    setActiveSection('tasks');
+                  }}
+                  className="text-xs font-medium text-accent hover:underline"
+                >
+                  كل المهام
+                </button>
+              </div>
             </div>
 
             {dueTodayOrOverdue.length === 0 ? (
@@ -861,6 +1029,15 @@ export const HomeView: React.FC = () => {
                           )}
                         </p>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => startFocusForTask({id: task.id, title: task.title})}
+                        aria-label={`ابدأ جلسة تركيز على ${task.title}`}
+                        title="ابدأ مؤقت التركيز"
+                        className="flex min-h-[38px] min-w-[38px] shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-500 transition-colors hover:border-accent hover:bg-accent-soft hover:text-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400"
+                      >
+                        <Timer className="h-4 w-4" />
+                      </button>
                     </div>
                   );
                 })}
@@ -957,27 +1134,34 @@ export const HomeView: React.FC = () => {
             </div>
           ) : (
             <div className="mt-3 space-y-4">
-              {goals.slice(0, 5).map((g) => (
-                <div key={g.id} className="space-y-1.5">
-                  <div className="flex items-center justify-between gap-2 text-sm">
-                    <span className="truncate font-medium text-slate-900 dark:text-slate-100">
-                      {g.title}
-                    </span>
-                    <span className="font-mono text-xs font-semibold tabular-nums text-accent">
-                      {g.progress}%
-                    </span>
+              {goals.slice(0, 5).map((g) => {
+                const linked = computeGoalLinkedProgress(g.id, allTasks);
+                const pct = linked.percent !== null ? linked.percent : g.progress;
+                const palette = resolveGoalPalette(pct, g.color);
+                return (
+                  <div key={g.id} className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2 text-sm">
+                      <span className="truncate font-medium text-slate-900 dark:text-slate-100">
+                        {g.title}
+                      </span>
+                      <span className={`font-mono text-xs font-semibold tabular-nums ${palette.text}`}>
+                        {pct}%
+                      </span>
+                    </div>
+                    <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700/80">
+                      <div
+                        className={`h-full rounded-full transition-all duration-300 ${palette.bar}`}
+                        style={{width: `${pct}%`}}
+                      />
+                    </div>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      {g.kind} · {formatFriendlyDate(g.targetDate)}
+                      {linked.linkedCount > 0 &&
+                        ` · ${linked.doneCount}/${linked.linkedCount} مهام مرتبطة`}
+                    </p>
                   </div>
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
-                    <div
-                      className="h-full bg-accent transition-all"
-                      style={{width: `${g.progress}%`}}
-                    />
-                  </div>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    {g.kind} · {formatFriendlyDate(g.targetDate)}
-                  </p>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>

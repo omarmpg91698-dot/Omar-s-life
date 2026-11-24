@@ -6,14 +6,17 @@ import {
   Check,
   Download,
   FileSpreadsheet,
+  Lock,
   Moon,
   Palette,
   Pencil,
   Plus,
   RotateCcw,
+  ShieldCheck,
   Sun,
   Tag,
   Trash2,
+  Unlock,
   Upload,
   X,
 } from 'lucide-react';
@@ -22,6 +25,7 @@ import {PWAInstallButton} from '../components/PWAInstallButton';
 import {useLife} from '../context/LifeContext';
 import {exportOmarsLifeToExcel} from '../storage/excelExport';
 import {DEFAULT_TASK_TAGS} from '../storage/localStore';
+import {hashLocalPin, verifyLocalPin} from '../storage/productivityUtils';
 import type {AccentColor, TaskPriority} from '../types';
 
 export const SettingsView: React.FC = () => {
@@ -36,6 +40,7 @@ export const SettingsView: React.FC = () => {
     restoreFromBackupJson,
     clearAllData,
     setActiveSection,
+    lockApp,
     tasks,
     archivedTasks,
     allTasks,
@@ -51,12 +56,75 @@ export const SettingsView: React.FC = () => {
   const [confirmDeleteTag, setConfirmDeleteTag] = useState<string | null>(null);
   const [editingTag, setEditingTag] = useState<string | null>(null);
   const [editTagInput, setEditTagInput] = useState('');
+  const [pinMode, setPinMode] = useState<'idle' | 'setup' | 'change' | 'disable'>('idle');
+  const [pinCurrent, setPinCurrent] = useState('');
+  const [pinNew, setPinNew] = useState('');
+  const [pinConfirm, setPinConfirm] = useState('');
+  const [pinError, setPinError] = useState('');
   const [browserNotifPermission, setBrowserNotifPermission] = useState<string>(() => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
       return Notification.permission;
     }
     return 'unsupported';
   });
+
+  const resetPinForm = () => {
+    setPinMode('idle');
+    setPinCurrent('');
+    setPinNew('');
+    setPinConfirm('');
+    setPinError('');
+  };
+
+  const handlePinSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setPinError('');
+    const pinRegex = /^\d{4}$/;
+
+    if (pinMode === 'setup') {
+      if (!pinRegex.test(pinNew)) {
+        setPinError('الرقم السري لازم يكون ٤ أرقام بالظبط.');
+        return;
+      }
+      if (pinNew !== pinConfirm) {
+        setPinError('الرقمين مش متطابقين، راجعهم تاني.');
+        return;
+      }
+      updatePreferences({pinLockEnabled: true, pinHash: hashLocalPin(pinNew)});
+      resetPinForm();
+      setStatusMsg({type: 'ok', text: 'تم تفعيل قفل التطبيق بالرقم السري بنجاح.'});
+      return;
+    }
+
+    if (pinMode === 'change') {
+      if (!verifyLocalPin(pinCurrent, preferences.pinHash)) {
+        setPinError('الرقم السري الحالي غلط.');
+        return;
+      }
+      if (!pinRegex.test(pinNew)) {
+        setPinError('الرقم السري الجديد لازم يكون ٤ أرقام.');
+        return;
+      }
+      if (pinNew !== pinConfirm) {
+        setPinError('تأكيد الرقم السري الجديد مش متطابق.');
+        return;
+      }
+      updatePreferences({pinLockEnabled: true, pinHash: hashLocalPin(pinNew)});
+      resetPinForm();
+      setStatusMsg({type: 'ok', text: 'تم تغيير الرقم السري بنجاح.'});
+      return;
+    }
+
+    if (pinMode === 'disable') {
+      if (!verifyLocalPin(pinCurrent, preferences.pinHash)) {
+        setPinError('الرقم السري الحالي غلط.');
+        return;
+      }
+      updatePreferences({pinLockEnabled: false, pinHash: null});
+      resetPinForm();
+      setStatusMsg({type: 'ok', text: 'تم إلغاء قفل التطبيق بالرقم السري.'});
+    }
+  };
 
   const handleRequestBrowserNotifications = async () => {
     if (typeof window === 'undefined' || !('Notification' in window)) return;
@@ -496,6 +564,152 @@ export const SettingsView: React.FC = () => {
             </button>
           </div>
         </div>
+      </section>
+
+      {/* PIN Lock Privacy Section */}
+      <section className="space-y-4 rounded-2xl border border-slate-200/80 bg-white p-5 dark:border-slate-800 dark:bg-slate-800/90">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900 dark:text-slate-100">
+              <Lock className="h-4 w-4 text-accent" />
+              <span>قفل التطبيق برقم سري (PIN)</span>
+            </h2>
+            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+              احمِ مهامك وملاحظاتك الخاصة برقم سري من ٤ أرقام يُطلب عند فتح التطبيق
+            </p>
+          </div>
+
+          {preferences.pinLockEnabled && preferences.pinHash ? (
+            <span className="inline-flex items-center gap-1 rounded-xl bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+              <ShieldCheck className="h-3.5 w-3.5" />
+              <span>مفعّل</span>
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 rounded-xl bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500 dark:bg-slate-900 dark:text-slate-400">
+              <Unlock className="h-3.5 w-3.5" />
+              <span>غير مفعّل</span>
+            </span>
+          )}
+        </div>
+
+        {pinMode === 'idle' ? (
+          <div className="flex flex-wrap items-center gap-2">
+            {preferences.pinLockEnabled && preferences.pinHash ? (
+              <>
+                <button
+                  type="button"
+                  onClick={lockApp}
+                  className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-accent px-4 text-xs font-semibold text-white whitespace-nowrap"
+                >
+                  <Lock className="h-3.5 w-3.5" />
+                  <span>قفل التطبيق الآن</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPinMode('change')}
+                  className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3.5 text-xs font-medium text-slate-700 hover:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 whitespace-nowrap"
+                >
+                  <span>تغيير الرقم السري</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPinMode('disable')}
+                  className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-red-200 px-3.5 text-xs font-medium text-red-600 hover:bg-red-50 dark:border-red-900/60 dark:text-red-400 dark:hover:bg-red-950/30 whitespace-nowrap"
+                >
+                  <span>إلغاء القفل</span>
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setPinMode('setup')}
+                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-accent px-4 text-xs font-semibold text-white whitespace-nowrap"
+              >
+                <Lock className="h-3.5 w-3.5" />
+                <span>تعيين رقم سري (٤ أرقام)</span>
+              </button>
+            )}
+          </div>
+        ) : (
+          <form onSubmit={handlePinSubmit} className="space-y-3 rounded-xl border border-slate-200/80 bg-slate-50/70 p-4 dark:border-slate-700 dark:bg-slate-900/50">
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+              {(pinMode === 'change' || pinMode === 'disable') && (
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                    الرقم السري الحالي
+                  </label>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={4}
+                    value={pinCurrent}
+                    onChange={(e) => setPinCurrent(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                    placeholder="••••"
+                    dir="ltr"
+                    className="min-h-[40px] w-full rounded-xl border border-slate-200 bg-white px-3 text-center text-sm tracking-[0.5em] text-slate-900 outline-none focus:border-accent dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  />
+                </div>
+              )}
+
+              {(pinMode === 'setup' || pinMode === 'change') && (
+                <>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                      الرقم السري الجديد (٤ أرقام)
+                    </label>
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      maxLength={4}
+                      value={pinNew}
+                      onChange={(e) => setPinNew(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                      placeholder="••••"
+                      dir="ltr"
+                      className="min-h-[40px] w-full rounded-xl border border-slate-200 bg-white px-3 text-center text-sm tracking-[0.5em] text-slate-900 outline-none focus:border-accent dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                      تأكيد الرقم السري
+                    </label>
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      maxLength={4}
+                      value={pinConfirm}
+                      onChange={(e) =>
+                        setPinConfirm(e.target.value.replace(/\D/g, '').slice(0, 4))
+                      }
+                      placeholder="••••"
+                      dir="ltr"
+                      className="min-h-[40px] w-full rounded-xl border border-slate-200 bg-white px-3 text-center text-sm tracking-[0.5em] text-slate-900 outline-none focus:border-accent dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+
+            {pinError && (
+              <p className="text-xs font-medium text-red-600 dark:text-red-400">{pinError}</p>
+            )}
+
+            <div className="flex items-center gap-2">
+              <button
+                type="submit"
+                className="min-h-[38px] rounded-xl bg-accent px-4 text-xs font-semibold text-white whitespace-nowrap"
+              >
+                {pinMode === 'disable' ? 'تأكيد إلغاء القفل' : 'حفظ الرقم السري'}
+              </button>
+              <button
+                type="button"
+                onClick={resetPinForm}
+                className="min-h-[38px] rounded-xl border border-slate-200 px-3.5 text-xs font-medium text-slate-600 dark:border-slate-700 dark:text-slate-300"
+              >
+                إلغاء
+              </button>
+            </div>
+          </form>
+        )}
       </section>
 
       {/* Task Tags Management */}

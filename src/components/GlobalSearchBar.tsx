@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   CheckSquare,
   Circle,
+  FileBadge2,
   FileText,
   Plus,
   Search,
@@ -24,7 +25,7 @@ interface GlobalSearchBarProps {
 }
 
 export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({onQuickCreateFromQuery}) => {
-  const {allTasks, notes, goals, updateTask, navigateToItem} = useLife();
+  const {allTasks, notes, documents, goals, updateTask, navigateToItem} = useLife();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<SearchFilterKind>('all');
   const [isOpen, setIsOpen] = useState(false);
@@ -36,8 +37,8 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({onQuickCreateFr
   const hasQuery = query.trim().length > 0;
 
   const {results, counts} = useMemo(
-    () => searchAllLifeItems({tasks: allTasks, notes, goals}, query, filter),
-    [allTasks, notes, goals, query, filter],
+    () => searchAllLifeItems({tasks: allTasks, notes, documents, goals}, query, filter),
+    [allTasks, notes, documents, goals, query, filter],
   );
 
   // Reset active highlight when results change
@@ -92,7 +93,9 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({onQuickCreateFr
           : 'tasks'
         : item.kind === 'note'
           ? 'notes'
-          : 'goals';
+          : item.kind === 'document'
+            ? 'documents'
+            : 'goals';
     setIsOpen(false);
     setQuery('');
     navigateToItem(section, item.id);
@@ -124,13 +127,14 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({onQuickCreateFr
     }
   };
 
-  const totalItems = allTasks.length + notes.length + goals.length;
+  const totalItems = allTasks.length + notes.length + documents.length + goals.length;
   const showDropdown = isOpen && hasQuery;
 
   const filterTabs: Array<{id: SearchFilterKind; label: string; count: number}> = [
     {id: 'all', label: 'الكل', count: counts.all},
     {id: 'task', label: 'مهام', count: counts.task},
     {id: 'note', label: 'ملاحظات', count: counts.note},
+    {id: 'document', label: 'وثائق', count: counts.document},
     {id: 'goal', label: 'أهداف ومشاريع', count: counts.goal},
   ];
 
@@ -157,8 +161,8 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({onQuickCreateFr
           role="combobox"
           aria-expanded={showDropdown}
           aria-controls="global-search-results"
-          aria-label="بحث شامل في المهام والملاحظات والأهداف"
-          placeholder={`ابحث فوراً في مهامك وملاحظاتك وأهدافك (${totalItems} عنصر)...`}
+          aria-label="بحث شامل في المهام والملاحظات والوثائق والأهداف"
+          placeholder={`ابحث فوراً في مهامك وملاحظاتك ووثائقك (${totalItems} عنصر)...`}
           className="min-h-[38px] w-full bg-transparent text-sm text-slate-900 placeholder:text-slate-400 outline-none dark:text-slate-100 dark:placeholder:text-slate-500"
         />
 
@@ -325,6 +329,8 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({onQuickCreateFr
                       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-accent dark:bg-slate-800">
                         {item.kind === 'note' ? (
                           <FileText className="h-4 w-4" />
+                        ) : item.kind === 'document' ? (
+                          <FileBadge2 className="h-4 w-4" />
                         ) : (
                           <Target className="h-4 w-4" />
                         )}
@@ -406,6 +412,18 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({onQuickCreateFr
                                 <span>{item.note.images.length} صور مرفقة</span>
                               </>
                             )}
+                          </>
+                        )}
+
+                        {item.document && (
+                          <>
+                            <span className="font-medium text-slate-600 dark:text-slate-300">
+                              وثيقة
+                            </span>
+                            <span aria-hidden="true">·</span>
+                            <span>{item.document.category}</span>
+                            <span aria-hidden="true">·</span>
+                            <span>تنتهي {formatFriendlyDate(item.document.expiryDate)}</span>
                           </>
                         )}
 

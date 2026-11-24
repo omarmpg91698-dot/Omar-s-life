@@ -14,6 +14,8 @@ export const DEFAULT_PREFERENCES: AppPreferences = {
   remindersEnabled: true,
   autoArchiveEnabled: true,
   autoArchiveDays: 30,
+  pinLockEnabled: false,
+  pinHash: null,
 };
 
 export function createEmptyStore(): OmarsLifeStore {
@@ -21,10 +23,29 @@ export function createEmptyStore(): OmarsLifeStore {
     version: 1,
     tasks: [],
     notes: [],
+    documents: [],
     goals: [],
+    habits: [],
+    focusSessions: [],
+    assistantProfile: {
+      roleAndWork: '',
+      dailyRoutine: '',
+      topPriorities: '',
+      personalNotes: '',
+      tone: 'friendly',
+      updatedAt: 0,
+    },
+    assistantMemories: [],
+    assistantMessages: [],
     preferences: {...DEFAULT_PREFERENCES},
   };
 }
+
+const taskSubtaskSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  done: z.boolean().default(false),
+});
 
 const taskSchema = z.object({
   id: z.string().min(1),
@@ -35,6 +56,10 @@ const taskSchema = z.object({
   tags: z.array(z.string()).default([]),
   reminderEnabled: z.boolean().default(true),
   reminderTime: z.string().nullable().default(null),
+  recurrence: z.enum(['none', 'daily', 'weekly', 'monthly']).default('none'),
+  recurrenceSpawned: z.boolean().optional(),
+  subtasks: z.array(taskSubtaskSchema).default([]),
+  goalId: z.string().nullable().optional(),
   plannerOrder: z.number().int().optional(),
   completedAt: z.number().nullable().optional(),
   archivedAt: z.number().nullable().optional(),
@@ -54,6 +79,29 @@ const noteSchema = z.object({
   content: z.string(),
   category: z.enum(['شخصي', 'شغل', 'أفكار', 'حاجات مهمة']),
   images: z.array(noteImageSchema).default([]),
+  pinned: z.boolean().default(false),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+
+const documentSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  category: z
+    .enum([
+      'بطاقة وهوية',
+      'جواز سفر',
+      'رخصة',
+      'عقد وإيجار',
+      'تأمين',
+      'أوراق رسمية',
+      'أخرى',
+    ])
+    .default('أوراق رسمية'),
+  documentNumber: z.string().optional().default(''),
+  expiryDate: z.string().min(1),
+  reminderLead: z.enum(['month', 'week', 'day']).default('month'),
+  notes: z.string().optional().default(''),
   createdAt: z.number(),
   updatedAt: z.number(),
 });
@@ -65,8 +113,26 @@ const goalSchema = z.object({
   description: z.string(),
   targetDate: z.string().nullable(),
   progress: z.number().min(0).max(100),
+  color: z.enum(['auto', 'teal', 'blue', 'emerald', 'amber', 'rose', 'violet']).optional().default('auto'),
   createdAt: z.number(),
   updatedAt: z.number(),
+});
+
+const habitSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  completedDates: z.array(z.string()).default([]),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+
+const focusSessionSchema = z.object({
+  id: z.string().min(1),
+  taskId: z.string().nullable().default(null),
+  taskTitle: z.string().default('جلسة تركيز'),
+  durationMinutes: z.number().min(1).max(240),
+  completedAt: z.number(),
+  dateIso: z.string().min(1),
 });
 
 const preferencesSchema = z.object({
@@ -78,13 +144,61 @@ const preferencesSchema = z.object({
   remindersEnabled: z.boolean().default(true),
   autoArchiveEnabled: z.boolean().default(true),
   autoArchiveDays: z.number().int().min(1).max(365).default(30),
+  pinLockEnabled: z.boolean().default(false),
+  pinHash: z.string().nullable().optional(),
+});
+
+const assistantProfileSchema = z.object({
+  roleAndWork: z.string().default(''),
+  dailyRoutine: z.string().default(''),
+  topPriorities: z.string().default(''),
+  personalNotes: z.string().default(''),
+  tone: z.enum(['friendly', 'direct', 'coach']).default('friendly'),
+  updatedAt: z.number().default(0),
+});
+
+const assistantMemorySchema = z.object({
+  id: z.string().min(1),
+  category: z.enum(['شخصي', 'شغل', 'روتين', 'تفضيلات', 'علاقات', 'صحة']).default('شخصي'),
+  fact: z.string().min(1),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+
+const assistantActionLogSchema = z.object({
+  kind: z.enum([
+    'add_task',
+    'complete_task',
+    'schedule_task',
+    'add_goal',
+    'add_note',
+    'add_habit',
+    'save_memory',
+  ]),
+  summary: z.string(),
+});
+
+const assistantMessageSchema = z.object({
+  id: z.string().min(1),
+  role: z.enum(['user', 'assistant']),
+  text: z.string(),
+  hasImage: z.boolean().optional(),
+  actions: z.array(assistantActionLogSchema).optional(),
+  suggestedFollowUps: z.array(z.string()).optional(),
+  createdAt: z.number(),
 });
 
 export const storeBackupSchema = z.object({
   version: z.literal(1),
   tasks: z.array(taskSchema),
   notes: z.array(noteSchema),
+  documents: z.array(documentSchema).optional().default([]),
   goals: z.array(goalSchema),
+  habits: z.array(habitSchema).optional().default([]),
+  focusSessions: z.array(focusSessionSchema).optional().default([]),
+  assistantProfile: assistantProfileSchema.optional(),
+  assistantMemories: z.array(assistantMemorySchema).optional().default([]),
+  assistantMessages: z.array(assistantMessageSchema).optional().default([]),
   preferences: preferencesSchema.optional(),
 });
 
@@ -179,7 +293,20 @@ export function loadStore(): OmarsLifeStore {
       version: 1,
       tasks: parsed.data.tasks,
       notes: parsed.data.notes,
+      documents: parsed.data.documents ?? [],
       goals: parsed.data.goals,
+      habits: parsed.data.habits ?? [],
+      focusSessions: parsed.data.focusSessions ?? [],
+      assistantProfile: parsed.data.assistantProfile ?? {
+        roleAndWork: '',
+        dailyRoutine: '',
+        topPriorities: '',
+        personalNotes: '',
+        tone: 'friendly',
+        updatedAt: 0,
+      },
+      assistantMemories: parsed.data.assistantMemories ?? [],
+      assistantMessages: parsed.data.assistantMessages ?? [],
       preferences: {
         ...DEFAULT_PREFERENCES,
         ...parsed.data.preferences,
@@ -211,7 +338,20 @@ export function parseAndValidateBackup(rawJson: string): OmarsLifeStore {
     version: 1,
     tasks: parsed.data.tasks,
     notes: parsed.data.notes,
+    documents: parsed.data.documents ?? [],
     goals: parsed.data.goals,
+    habits: parsed.data.habits ?? [],
+    focusSessions: parsed.data.focusSessions ?? [],
+    assistantProfile: parsed.data.assistantProfile ?? {
+      roleAndWork: '',
+      dailyRoutine: '',
+      topPriorities: '',
+      personalNotes: '',
+      tone: 'friendly',
+      updatedAt: 0,
+    },
+    assistantMemories: parsed.data.assistantMemories ?? [],
+    assistantMessages: parsed.data.assistantMessages ?? [],
     preferences: {
       ...DEFAULT_PREFERENCES,
       ...parsed.data.preferences,

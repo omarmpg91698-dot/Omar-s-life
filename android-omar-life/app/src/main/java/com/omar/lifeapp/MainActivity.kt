@@ -48,6 +48,7 @@ class MainActivity : AppCompatActivity() {
     // (/assets/index.js, /manifest.webmanifest, /sw.js, /icon.svg) resolve naturally.
     private val assetLoader: WebViewAssetLoader by lazy {
         WebViewAssetLoader.Builder()
+            .setDomain(APP_ASSETS_HOST)
             .addPathHandler("/") { path ->
                 val clean = path.trimStart('/')
                 val target = if (clean.isEmpty()) "www/index.html" else "www/$clean"
@@ -74,6 +75,9 @@ class MainActivity : AppCompatActivity() {
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
+                // Present as regular Chrome (not a WebView) so Google sign-in
+                // doesn't reject the OAuth flow with disallowed_useragent.
+                userAgentString = WebSettings.getDefaultUserAgent(this@MainActivity).replace("; wv", "")
                 databaseEnabled = true
                 allowFileAccess = false
                 allowContentAccess = true
@@ -112,7 +116,14 @@ class MainActivity : AppCompatActivity() {
                     request: WebResourceRequest
                 ): Boolean {
                     val url = request.url
-                    if (url.host == APP_ASSETS_HOST) {
+                    val host = url.host.orEmpty()
+                    // Keep the Firebase/Google sign-in redirect chain inside the
+                    // WebView; everything else external still opens in the browser.
+                    if (host == APP_ASSETS_HOST ||
+                        host == "firebaseapp.com" || host.endsWith(".firebaseapp.com") ||
+                        host.endsWith(".google.com") || host.endsWith(".googleapis.com") ||
+                        host.endsWith(".gstatic.com") || host.endsWith(".googleusercontent.com")
+                    ) {
                         return false
                     }
                     return try {
@@ -291,8 +302,8 @@ class MainActivity : AppCompatActivity() {
     companion object {
         const val CHANNEL_OCCASIONS = "occasions"
         private const val REQUEST_NOTIFICATIONS = 4101
-        private const val APP_ASSETS_HOST = "appassets.androidplatform.net"
-        private const val START_URL = "https://appassets.androidplatform.net/index.html"
+        private const val APP_ASSETS_HOST = "localhost"
+        private const val START_URL = "https://localhost/index.html"
 
         private fun guessMime(path: String): String? {
             return when (path.substringAfterLast('.', "").lowercase()) {

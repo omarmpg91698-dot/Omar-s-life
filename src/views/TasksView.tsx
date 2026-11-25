@@ -43,7 +43,7 @@ import {
   isTaskReminderDueToday,
 } from '../storage/localStore';
 import {RECURRENCE_LABELS} from '../storage/productivityUtils';
-import {iconForTask, TASK_ICON_OPTIONS, autoIconForTitle} from '../utils/taskIcons';
+import {iconForTask, TASK_ICON_OPTIONS, autoIconForTitle, iconIdForTask, iconColorClasses} from '../utils/taskIcons';
 import {parseVoiceTask} from '../utils/voiceTaskParser';
 import {captureVoiceText, isVoiceCaptureAvailable, stopVoiceCapture, voiceErrorMessage} from '../services/androidSpeech';
 import {
@@ -938,7 +938,7 @@ export const TasksView: React.FC = () => {
               onClick={() => setIconPickerTaskId(task.id)}
               aria-label={`أيقونة ${task.title}`}
               title="غيّر الأيقونة"
-              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent transition-transform hover:scale-105 ${
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-transform hover:scale-105 ${iconColorClasses(iconIdForTask(task))} ${
                 task.status === 'خلصت' ? 'opacity-45' : ''
               }`}
             >
@@ -2000,7 +2000,7 @@ export const TasksView: React.FC = () => {
                         onClick={() => setIconPickerTaskId(task.id)}
                         aria-label="تغيير أيقونة المهمة"
                         title="غيّر الأيقونة"
-                        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-accent-soft text-accent transition-transform hover:scale-105"
+                        className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border transition-transform hover:scale-105 ${iconColorClasses(iconIdForTask(task))}`}
                       >
                         {(() => {
                           const DetailIcon = iconForTask(task);
@@ -2716,10 +2716,10 @@ export const TasksView: React.FC = () => {
                       updateTask(iconPickerTaskId, {icon: opt.id});
                       setIconPickerTaskId(null);
                     }}
-                    className={`flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl border p-1.5 transition-colors ${
+                    className={`flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl border p-1.5 transition-transform hover:scale-105 ${iconColorClasses(opt.id)} ${
                       isActive
-                        ? 'border-accent bg-accent-soft text-accent'
-                        : 'border-slate-200 text-slate-500 hover:border-accent hover:text-accent dark:border-slate-700 dark:text-slate-300'
+                        ? 'ring-2 ring-accent ring-offset-1 dark:ring-offset-slate-900'
+                        : ''
                     }`}
                   >
                     <OptIcon className="h-5 w-5" />
@@ -2766,7 +2766,7 @@ export const TasksView: React.FC = () => {
                   key={task.id}
                   className="flex items-center gap-3 rounded-2xl border border-slate-200/80 bg-white p-3.5 dark:border-slate-800 dark:bg-slate-900"
                 >
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-400 dark:bg-slate-800">
+                  <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border opacity-70 ${iconColorClasses(iconIdForTask(task))}`}>
                     <TrashIcon className="h-4.5 w-4.5" />
                   </span>
                   <div className="min-w-0 flex-1">

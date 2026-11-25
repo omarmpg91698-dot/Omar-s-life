@@ -11,8 +11,8 @@ android {
         applicationId = "com.omar.lifeapp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 23
-        versionName = "9.6"
+        versionCode = 24
+        versionName = "9.7"
     }
 
     buildTypes {

@@ -851,8 +851,8 @@ export const TasksView: React.FC = () => {
                     : ''
           }`}
         >
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-1 basis-full items-center gap-3">
             {selectionMode && (
               <button
                 type="button"
@@ -1041,7 +1041,7 @@ export const TasksView: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             <button
               type="button"
               onClick={() =>

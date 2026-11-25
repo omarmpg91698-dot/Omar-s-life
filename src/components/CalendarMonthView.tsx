@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import {useLife} from '../context/LifeContext';
 import {formatFriendlyDate, getTodayIso} from '../storage/localStore';
+import {occasionsForDate} from '../data/egyptOccasions';
 import {RECURRENCE_LABELS, buildArabicMonthGrid} from '../storage/productivityUtils';
 import type {TaskItem} from '../types';
 
@@ -83,6 +84,8 @@ export const CalendarMonthView: React.FC<CalendarMonthViewProps> = ({onSelectTas
     () => goalsByDate.get(selectedDate) ?? [],
     [goalsByDate, selectedDate],
   );
+
+  const selectedDayOccasions = useMemo(() => occasionsForDate(selectedDate), [selectedDate]);
 
   const goPrevMonth = () => {
     if (viewMonth === 1) {
@@ -176,6 +179,7 @@ export const CalendarMonthView: React.FC<CalendarMonthViewProps> = ({onSelectTas
             const dayGoals = goalsByDate.get(cell.dateIso) ?? [];
             const pendingCount = dayTasks.filter((t) => t.status !== 'خلصت').length;
             const doneCount = dayTasks.filter((t) => t.status === 'خلصت').length;
+            const dayOccasions = occasionsForDate(cell.dateIso);
             const isSelected = cell.dateIso === selectedDate;
             const isToday = cell.dateIso === todayIso;
 
@@ -225,6 +229,12 @@ export const CalendarMonthView: React.FC<CalendarMonthViewProps> = ({onSelectTas
                       className="w-2 h-2 rounded-full bg-amber-500"
                     />
                   )}
+                  {dayOccasions.length > 0 && (
+                    <span
+                      title={dayOccasions.map((o) => o.name).join('، ')}
+                      className="w-2 h-2 rounded-full bg-rose-500"
+                    />
+                  )}
                 </div>
               </button>
             );
@@ -244,6 +254,10 @@ export const CalendarMonthView: React.FC<CalendarMonthViewProps> = ({onSelectTas
           <span className="inline-flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
             ميعاد هدف / مشروع
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-rose-500" />
+            مناسبة أو أجازة رسمية
           </span>
         </div>
       </div>
@@ -266,6 +280,34 @@ export const CalendarMonthView: React.FC<CalendarMonthViewProps> = ({onSelectTas
             {selectedDayTasks.length} مهمة
           </span>
         </div>
+
+        {/* Egyptian holidays and Islamic occasions on this date */}
+        {selectedDayOccasions.length > 0 && (
+          <div className="space-y-2">
+            {selectedDayOccasions.map((occ) => (
+              <div
+                key={`${occ.dateIso}-${occ.name}`}
+                className={`flex items-center gap-2.5 rounded-xl border px-3 py-2.5 ${
+                  occ.kind === 'ramadan'
+                    ? 'border-violet-200 dark:border-violet-900/60 bg-violet-50/60 dark:bg-violet-950/25'
+                    : occ.kind === 'religious'
+                      ? 'border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/60 dark:bg-emerald-950/25'
+                      : 'border-rose-200 dark:border-rose-900/60 bg-rose-50/60 dark:bg-rose-950/25'
+                }`}
+              >
+                <span className="text-lg leading-none shrink-0" aria-hidden>
+                  {occ.emoji}
+                </span>
+                <p className="text-xs font-bold text-slate-800 dark:text-slate-100">
+                  {occ.name}
+                  {occ.tentative && (
+                    <span className="font-medium text-slate-400 dark:text-slate-500"> (متوقع)</span>
+                  )}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Quick add task for selected date */}
         <form onSubmit={handleQuickAdd} className="flex items-center gap-2">

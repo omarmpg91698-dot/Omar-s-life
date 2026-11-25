@@ -1,4 +1,5 @@
 import React, {useCallback, useEffect, useRef, useState} from 'react';
+import {fetchWeatherClientSide, searchCitiesClientSide} from '../services/weatherClient';
 import {
   ChevronDown,
   Cloud,
@@ -40,6 +41,7 @@ interface WeatherPayload {
   windKmh: number | null;
   precipChance: number | null;
   uvIndex: number | null;
+  provider?: 'google-weather' | 'open-meteo';
 }
 
 interface SearchCandidate {
@@ -51,7 +53,7 @@ interface SearchCandidate {
 
 const CITY_PREF_KEY = 'omars_life_weather_city';
 
-const QUICK_CITIES = ['القاهرة', 'الجيزة', 'الإسكندرية', 'المنصورة', 'الرياض', 'دبي'];
+const QUICK_CITIES = ['العبور', 'القاهرة', 'الجيزة', 'الإسكندرية', 'المنصورة', 'الرياض', 'دبي'];
 
 const ARABIC_CONDITION_FALLBACK: Record<string, string> = {
   CLEAR: 'صافي',
@@ -160,6 +162,18 @@ export const WeatherWidget: React.FC = () => {
         params.set('tz', tz);
       }
 
+      const persistCity = () => {
+        try {
+          if (options?.clearPersistedCity) {
+            localStorage.removeItem(CITY_PREF_KEY);
+          } else if (options?.persistCityQuery) {
+            localStorage.setItem(CITY_PREF_KEY, options.persistCityQuery);
+          }
+        } catch {
+          // ignore storage errors
+        }
+      };
+
       setLoading(true);
       setErrorMsg('');
       setIconFailed(false);
@@ -191,6 +205,19 @@ export const WeatherWidget: React.FC = () => {
         }
 
         if (!res.ok || !data.location) {
+          // The installed Android build has no server for /api/weather:
+          // fall back to the direct client-side provider (Open-Meteo).
+          const clientData = await fetchWeatherClientSide(params);
+          if (!mountedRef.current || seq !== requestSeqRef.current) {
+            return false;
+          }
+          if (clientData) {
+            setWeather(clientData);
+            setErrorMsg('');
+            setInfoMsg('');
+            persistCity();
+            return true;
+          }
           setErrorMsg(
             data.message || 'مقدرناش نحمّل حالة الطقس دلوقتي. جرّب تاني أو اكتب اسم مدينتك.',
           );
@@ -200,21 +227,28 @@ export const WeatherWidget: React.FC = () => {
         setWeather(data as WeatherPayload);
         setErrorMsg('');
         setInfoMsg('');
-
-        try {
-          if (options?.clearPersistedCity) {
-            localStorage.removeItem(CITY_PREF_KEY);
-          } else if (options?.persistCityQuery) {
-            localStorage.setItem(CITY_PREF_KEY, options.persistCityQuery);
-          }
-        } catch {
-          // ignore storage errors
-        }
+        persistCity();
 
         return true;
       } catch (err) {
         if (err instanceof DOMException && err.name === 'AbortError') {
           return false;
+        }
+        // No server at all in the installed build: try the direct provider.
+        try {
+          const clientData = await fetchWeatherClientSide(params);
+          if (!mountedRef.current || seq !== requestSeqRef.current) {
+            return false;
+          }
+          if (clientData) {
+            setWeather(clientData);
+            setErrorMsg('');
+            setInfoMsg('');
+            persistCity();
+            return true;
+          }
+        } catch {
+          // fall through to the connectivity message
         }
         if (mountedRef.current && seq === requestSeqRef.current) {
           setErrorMsg('مفيش اتصال بالإنترنت لتحديث حالة الطقس حالياً.');
@@ -323,30 +357,42 @@ export const WeatherWidget: React.FC = () => {
     const timer = window.setTimeout(async () => {
       setSearchingPlaces(true);
       try {
-        const params = new URLSearchParams({q});
-        const tz = getBrowserTimeZone();
-        if (tz) params.set('tz', tz);
-        const res = await fetch(`/api/weather/search?${params.toString()}`, {
-          cache: 'no-store',
-          signal: controller.signal,
-          headers: {Accept: 'application/json'},
-        });
-        const data = (await res.json().catch(() => ({}))) as {
-          results?: SearchCandidate[];
-          status?: string;
-          error?: string;
-        };
-        if (
-          res.status === 429 ||
-          data.status === 'RESOURCE_EXHAUSTED' ||
-          data.error === 'quota_exceeded'
-        ) {
-          window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
-          return;
+        let results: SearchCandidate[] | null = null;
+        try {
+          const params = new URLSearchParams({q});
+          const tz = getBrowserTimeZone();
+          if (tz) params.set('tz', tz);
+          const res = await fetch(`/api/weather/search?${params.toString()}`, {
+            cache: 'no-store',
+            signal: controller.signal,
+            headers: {Accept: 'application/json'},
+          });
+          const data = (await res.json().catch(() => ({}))) as {
+            results?: SearchCandidate[];
+            status?: string;
+            error?: string;
+          };
+          if (
+            res.status === 429 ||
+            data.status === 'RESOURCE_EXHAUSTED' ||
+            data.error === 'quota_exceeded'
+          ) {
+            window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
+            return;
+          }
+          if (res.ok && Array.isArray(data.results)) {
+            results = data.results;
+          }
+        } catch (err) {
+          if (err instanceof DOMException && err.name === 'AbortError') {
+            throw err;
+          }
         }
-        if (res.ok && Array.isArray(data.results)) {
-          setSearchResults(data.results);
+        if (results === null) {
+          // No server in the installed build: search cities client-side.
+          results = await searchCitiesClientSide(q, controller.signal);
         }
+        setSearchResults(results);
       } catch {
         // Ignore aborted or transient autocomplete errors
       } finally {
@@ -680,7 +726,9 @@ export const WeatherWidget: React.FC = () => {
 
         <span className="text-[11px] text-slate-400 dark:text-slate-500">
           {weather
-            ? `${locationSourceLabel}${observedTimeLabel ? ` · ${observedTimeLabel}` : ''} · Google Weather`
+            ? `${locationSourceLabel}${observedTimeLabel ? ` · ${observedTimeLabel}` : ''} · ${
+                weather.provider === 'open-meteo' ? 'Open-Meteo' : 'Google Weather'
+              }`
             : 'Google Weather'}
         </span>
       </div>

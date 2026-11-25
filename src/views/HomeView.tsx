@@ -23,6 +23,7 @@ import {GlobalSearchBar} from '../components/GlobalSearchBar';
 import {HabitTrackerCard} from '../components/HabitTrackerCard';
 import {SmartTagSuggestionsBar} from '../components/SmartTagSuggestionsBar';
 import {TagsDistributionChart} from '../components/TagsDistributionChart';
+import {OccasionsCard} from '../components/OccasionsCard';
 import {WeatherWidget} from '../components/WeatherWidget';
 import {WeeklyTasksDashboard} from '../components/WeeklyTasksDashboard';
 import {useDriveSync} from '../context/DriveSyncContext';
@@ -786,8 +787,9 @@ export const HomeView: React.FC = () => {
         )}
         </section>
 
-        <div className="lg:col-span-4">
+        <div className="lg:col-span-4 space-y-4">
           <WeatherWidget />
+          <OccasionsCard onOpenCalendar={() => setActiveSection('calendar')} />
         </div>
       </div>
 

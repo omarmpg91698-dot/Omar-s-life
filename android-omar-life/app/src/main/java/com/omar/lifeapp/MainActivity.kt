@@ -1,8 +1,13 @@
 package com.omar.lifeapp
 
 import android.annotation.SuppressLint
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.webkit.ValueCallback
@@ -15,6 +20,8 @@ import android.webkit.WebViewClient
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import android.view.ViewGroup
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -141,7 +148,12 @@ class MainActivity : AppCompatActivity() {
             windowInsets
         }
 
+        webView.addJavascriptInterface(OmarNativeBridge(this), "OmarNative")
+
         setContentView(webView)
+
+        createNotificationChannel()
+        maybeRequestNotificationPermission()
 
         onBackPressedDispatcher.addCallback(
             this,
@@ -161,6 +173,39 @@ class MainActivity : AppCompatActivity() {
             webView.restoreState(savedInstanceState)
         } else {
             webView.loadUrl(START_URL)
+        }
+    }
+
+    private fun createNotificationChannel() {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (Build.VERSION.SDK_INT >= 26) {
+                val channel = NotificationChannel(
+                    CHANNEL_OCCASIONS,
+                    "مناسبات وأجازات",
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                ).apply {
+                    description = "تذكير قبل كل مناسبة أو أجازة رسمية بيوم"
+                }
+                nm.createNotificationChannel(channel)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun maybeRequestNotificationPermission() {
+        try {
+            if (Build.VERSION.SDK_INT >= 33 &&
+                ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+                    REQUEST_NOTIFICATIONS,
+                )
+            }
+        } catch (_: Exception) {
         }
     }
 
@@ -202,6 +247,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        const val CHANNEL_OCCASIONS = "occasions"
+        private const val REQUEST_NOTIFICATIONS = 4101
         private const val APP_ASSETS_HOST = "appassets.androidplatform.net"
         private const val START_URL = "https://appassets.androidplatform.net/index.html"
 

@@ -16,6 +16,7 @@ import {
   Trophy,
 } from 'lucide-react';
 import {occasionsForDate} from '../data/egyptOccasions';
+import {getRamadanRange} from '../services/ramadanTimes';
 import {useLife} from '../context/LifeContext';
 import {getGoalStatusLabel, resolveGoalPalette} from '../storage/goalTheme';
 import {formatFriendlyDate, formatReminderTime, getTodayIso} from '../storage/localStore';
@@ -143,6 +144,7 @@ export const CalendarView: React.FC = () => {
   );
 
   const selectedDayOccasions = useMemo(() => occasionsForDate(selectedDate), [selectedDate]);
+  const ramadanRange = useMemo(() => getRamadanRange(todayIso), [todayIso]);
 
   const monthGoalsList = useMemo(() => {
     return goals
@@ -389,6 +391,9 @@ export const CalendarView: React.FC = () => {
               const isSelected = cell.dateIso === selectedDate;
               const isToday = cell.dateIso === todayIso;
               const dayOccasions = occasionsForDate(cell.dateIso);
+              const isRamadanDay = Boolean(
+                ramadanRange && cell.dateIso >= ramadanRange.startIso && cell.dateIso <= ramadanRange.endIso,
+              );
 
               // Build compact inline preview entries for tablet/desktop cells (up to 2 items)
               const previews: Array<{
@@ -429,9 +434,13 @@ export const CalendarView: React.FC = () => {
                       ? 'border-accent bg-accent-soft/80 ring-1 ring-accent dark:bg-accent-soft'
                       : isToday
                         ? 'border-accent/60 bg-slate-50 dark:bg-slate-900/70'
-                        : cell.inCurrentMonth
-                          ? 'border-slate-100 bg-white hover:border-slate-300 dark:border-slate-700/70 dark:bg-slate-900/40 dark:hover:border-slate-600'
-                          : 'border-transparent bg-slate-50/40 opacity-45 hover:opacity-80 dark:bg-slate-950/30'
+                        : isRamadanDay
+                          ? cell.inCurrentMonth
+                            ? 'border-emerald-200 bg-emerald-50/70 hover:border-emerald-400 dark:border-emerald-900/60 dark:bg-emerald-950/25 dark:hover:border-emerald-700'
+                            : 'border-transparent bg-emerald-50/30 opacity-45 hover:opacity-80 dark:bg-emerald-950/10'
+                          : cell.inCurrentMonth
+                            ? 'border-slate-100 bg-white hover:border-slate-300 dark:border-slate-700/70 dark:bg-slate-900/40 dark:hover:border-slate-600'
+                            : 'border-transparent bg-slate-50/40 opacity-45 hover:opacity-80 dark:bg-slate-950/30'
                   }`}
                 >
                   {/* Day Number Row */}
@@ -522,6 +531,10 @@ export const CalendarView: React.FC = () => {
             <span className="inline-flex items-center gap-1.5">
               <span className="h-2.5 w-2.5 rounded-full bg-violet-500" />
               <span>مناسبة أو أجازة رسمية</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2.5 w-2.5 rounded-sm border border-emerald-300 bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950" />
+              <span>أيام رمضان 🌙</span>
             </span>
           </div>
         </section>

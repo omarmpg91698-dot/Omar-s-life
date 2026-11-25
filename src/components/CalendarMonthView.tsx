@@ -13,6 +13,7 @@ import {
 import {useLife} from '../context/LifeContext';
 import {formatFriendlyDate, getTodayIso} from '../storage/localStore';
 import {occasionsForDate} from '../data/egyptOccasions';
+import {getRamadanRange} from '../services/ramadanTimes';
 import {RECURRENCE_LABELS, buildArabicMonthGrid} from '../storage/productivityUtils';
 import type {TaskItem} from '../types';
 
@@ -86,6 +87,7 @@ export const CalendarMonthView: React.FC<CalendarMonthViewProps> = ({onSelectTas
   );
 
   const selectedDayOccasions = useMemo(() => occasionsForDate(selectedDate), [selectedDate]);
+  const ramadanRange = useMemo(() => getRamadanRange(todayIso), [todayIso]);
 
   const goPrevMonth = () => {
     if (viewMonth === 1) {
@@ -182,6 +184,9 @@ export const CalendarMonthView: React.FC<CalendarMonthViewProps> = ({onSelectTas
             const dayOccasions = occasionsForDate(cell.dateIso);
             const isSelected = cell.dateIso === selectedDate;
             const isToday = cell.dateIso === todayIso;
+            const isRamadanDay = Boolean(
+              ramadanRange && cell.dateIso >= ramadanRange.startIso && cell.dateIso <= ramadanRange.endIso,
+            );
 
             return (
               <button
@@ -193,9 +198,13 @@ export const CalendarMonthView: React.FC<CalendarMonthViewProps> = ({onSelectTas
                     ? 'border-accent bg-accent-soft ring-1 ring-accent'
                     : isToday
                       ? 'border-slate-400 dark:border-slate-500 bg-slate-50 dark:bg-slate-800/70'
-                      : cell.inCurrentMonth
-                        ? 'border-slate-100 dark:border-slate-800/80 bg-white dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700'
-                        : 'border-transparent bg-slate-50/40 dark:bg-slate-950/30 opacity-45 hover:opacity-75'
+                      : isRamadanDay
+                        ? cell.inCurrentMonth
+                          ? 'border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/70 dark:bg-emerald-950/25 hover:border-emerald-400 dark:hover:border-emerald-700'
+                          : 'border-transparent bg-emerald-50/30 dark:bg-emerald-950/10 opacity-45 hover:opacity-75'
+                        : cell.inCurrentMonth
+                          ? 'border-slate-100 dark:border-slate-800/80 bg-white dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700'
+                          : 'border-transparent bg-slate-50/40 dark:bg-slate-950/30 opacity-45 hover:opacity-75'
                 }`}
               >
                 <span

@@ -23,7 +23,10 @@ import {GlobalSearchBar} from '../components/GlobalSearchBar';
 import {HabitTrackerCard} from '../components/HabitTrackerCard';
 import {SmartTagSuggestionsBar} from '../components/SmartTagSuggestionsBar';
 import {TagsDistributionChart} from '../components/TagsDistributionChart';
+import {BabyHomeCard} from '../components/BabyHomeCard';
 import {OccasionsCard} from '../components/OccasionsCard';
+import {RamadanCard} from '../components/RamadanCard';
+import {WeeklySummaryCard} from '../components/WeeklySummaryCard';
 import {WeatherWidget} from '../components/WeatherWidget';
 import {WeeklyTasksDashboard} from '../components/WeeklyTasksDashboard';
 import {useDriveSync} from '../context/DriveSyncContext';
@@ -790,8 +793,12 @@ export const HomeView: React.FC = () => {
         <div className="lg:col-span-4 space-y-4 lg:flex lg:flex-col">
           <WeatherWidget />
           <OccasionsCard onOpenCalendar={() => setActiveSection('calendar')} />
+          <RamadanCard />
+          <BabyHomeCard onOpenBaby={() => setActiveSection('baby')} />
         </div>
       </div>
+
+      <WeeklySummaryCard />
 
       {/* Simple 3-Number Overview */}
       <div className="grid grid-cols-3 gap-3">

@@ -48,6 +48,7 @@ import {OmarAiCompanionApp} from './views/OmarAiCompanionApp';
 import {SettingsView} from './views/SettingsView';
 import {TasksView} from './views/TasksView';
 import {getDocumentExpiryInfo} from './storage/documentsAndReminders';
+import {buildWidgetPayload, syncOccasionNotifications, syncWidgetData} from './services/nativeBridge';
 
 interface NavItem {
   id: NavSection;
@@ -173,6 +174,22 @@ const Shell: React.FC = () => {
     const timer = window.setInterval(checkAndNotify, 60_000);
     return () => window.clearInterval(timer);
   }, [tasks, preferences.remindersEnabled]);
+
+  // Native Android bridge: schedule day-before notifications for upcoming
+  // occasions and push today's tasks + weather to the home-screen widget.
+  // Both are no-ops in a plain browser.
+  useEffect(() => {
+    syncOccasionNotifications(getTodayIso());
+    const timer = window.setInterval(() => syncOccasionNotifications(getTodayIso()), 6 * 60 * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      syncWidgetData(buildWidgetPayload(tasks, getTodayIso()));
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [tasks]);
 
   const toggleTheme = () => {
     updatePreferences({theme: preferences.theme === 'dark' ? 'light' : 'dark'});

@@ -52,6 +52,21 @@ interface SearchCandidate {
 }
 
 const CITY_PREF_KEY = 'omars_life_weather_city';
+const WIDGET_WEATHER_CACHE_KEY = 'omars_life_widget_weather';
+
+// One-line weather summary cached for the native home-screen widget.
+function cacheWidgetWeatherLine(w: WeatherPayload | null): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    if (!w || typeof w.temperatureC !== 'number') return;
+    localStorage.setItem(
+      WIDGET_WEATHER_CACHE_KEY,
+      `${w.location.label}: ${Math.round(w.temperatureC)}° ${w.conditionText}`,
+    );
+  } catch {
+    // ignore
+  }
+}
 
 const QUICK_CITIES = ['العبور', 'القاهرة', 'الجيزة', 'الإسكندرية', 'المنصورة', 'الرياض', 'دبي'];
 
@@ -213,6 +228,7 @@ export const WeatherWidget: React.FC = () => {
           }
           if (clientData) {
             setWeather(clientData);
+            cacheWidgetWeatherLine(clientData as WeatherPayload);
             setErrorMsg('');
             setInfoMsg('');
             persistCity();
@@ -225,6 +241,7 @@ export const WeatherWidget: React.FC = () => {
         }
 
         setWeather(data as WeatherPayload);
+        cacheWidgetWeatherLine(data as WeatherPayload);
         setErrorMsg('');
         setInfoMsg('');
         persistCity();
@@ -242,6 +259,7 @@ export const WeatherWidget: React.FC = () => {
           }
           if (clientData) {
             setWeather(clientData);
+            cacheWidgetWeatherLine(clientData as WeatherPayload);
             setErrorMsg('');
             setInfoMsg('');
             persistCity();

@@ -449,72 +449,6 @@ const Shell: React.FC = () => {
             </button>
 
             <div className="flex shrink-0 items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => {
-                  if (!needsAuth) {
-                    void requestSmartSync();
-                  } else {
-                    setActiveSection('settings');
-                  }
-                }}
-                disabled={busyAction !== null}
-                aria-label={needsAuth ? 'ربط Google Drive' : 'مزامنة Google Drive'}
-                className={`inline-flex min-h-[38px] items-center justify-center rounded-xl border px-2.5 text-xs font-medium disabled:opacity-60 ${
-                  !needsAuth
-                    ? hasUnsyncedChanges
-                      ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-300'
-                      : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-300'
-                    : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
-                }`}
-              >
-                {busyAction !== null ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : needsAuth ? (
-                  <CloudOff className="h-3.5 w-3.5" />
-                ) : (
-                  <Cloud className="h-3.5 w-3.5" />
-                )}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setRemindersPanelOpen((v) => !v)}
-                aria-label="تنبيهات اليوم"
-                className={`relative inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border px-2.5 text-xs font-medium ${
-                  activeReminders.length > 0
-                    ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300'
-                    : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
-                }`}
-              >
-                {activeReminders.length > 0 ? (
-                  <BellRing className="h-3.5 w-3.5" />
-                ) : (
-                  <Bell className="h-3.5 w-3.5" />
-                )}
-                {activeReminders.length > 0 && (
-                  <span className="font-mono text-xs font-bold tabular-nums">
-                    {activeReminders.length}
-                  </span>
-                )}
-              </button>
-
-              <button
-                type="button"
-                onClick={toggleTheme}
-                aria-label={preferences.theme === 'dark' ? 'الوضع الفاتح' : 'الوضع الغامق'}
-                className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-              >
-                {preferences.theme === 'dark' ? (
-                  <Sun className="h-3.5 w-3.5" />
-                ) : (
-                  <Moon className="h-3.5 w-3.5" />
-                )}
-                <span className="hidden sm:inline">
-                  {preferences.theme === 'dark' ? 'فاتح' : 'غامق'}
-                </span>
-              </button>
-
               {hasPinLock && (
                 <button
                   type="button"
@@ -751,6 +685,76 @@ const Shell: React.FC = () => {
                 <X className="h-4 w-4" />
               </button>
             </div>
+            <div className="mb-3 grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setMoreSheetOpen(false);
+                  if (!needsAuth) {
+                    void requestSmartSync();
+                  } else {
+                    setActiveSection('settings');
+                  }
+                }}
+                disabled={busyAction !== null}
+                aria-label={needsAuth ? 'ربط Google Drive' : 'مزامنة Google Drive'}
+                className={`flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-2xl border px-2 text-xs font-semibold disabled:opacity-60 ${
+                  !needsAuth
+                    ? hasUnsyncedChanges
+                      ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-300'
+                      : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-300'
+                    : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                }`}
+              >
+                {busyAction !== null ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : needsAuth ? (
+                  <CloudOff className="h-4 w-4" />
+                ) : (
+                  <Cloud className="h-4 w-4" />
+                )}
+                <span>مزامنة</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMoreSheetOpen(false);
+                  setRemindersPanelOpen((v) => !v);
+                }}
+                aria-label="تنبيهات اليوم"
+                className={`relative flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-2xl border px-2 text-xs font-semibold ${
+                  activeReminders.length > 0
+                    ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300'
+                    : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                }`}
+              >
+                {activeReminders.length > 0 ? (
+                  <BellRing className="h-4 w-4" />
+                ) : (
+                  <Bell className="h-4 w-4" />
+                )}
+                <span>
+                  تنبيهات
+                  {activeReminders.length > 0 ? ` (${activeReminders.length})` : ''}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMoreSheetOpen(false);
+                  toggleTheme();
+                }}
+                aria-label={preferences.theme === 'dark' ? 'الوضع الفاتح' : 'الوضع الغامق'}
+                className="flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-2xl border border-slate-200 bg-slate-50 px-2 text-xs font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              >
+                {preferences.theme === 'dark' ? (
+                  <Sun className="h-4 w-4" />
+                ) : (
+                  <Moon className="h-4 w-4" />
+                )}
+                <span>{preferences.theme === 'dark' ? 'فاتح' : 'غامق'}</span>
+              </button>
+            </div>
             <div className="space-y-2">
               <button
                 type="button"
@@ -816,7 +820,7 @@ const Shell: React.FC = () => {
       {/* Mobile Bottom Navigation (5 primary daily tabs + More sheet) */}
       <nav
         aria-label="التنقل السريع"
-        className="fixed bottom-0 start-0 end-0 z-40 grid h-16 grid-cols-6 items-center border-t border-slate-200 bg-white/95 backdrop-blur-md pb-safe dark:border-slate-800 dark:bg-slate-800/95 lg:hidden"
+        className="fixed bottom-0 start-0 end-0 z-40 grid h-16 grid-cols-6 items-center border-t border-slate-200 bg-white pb-safe dark:border-slate-800 dark:bg-slate-800 lg:hidden"
       >
         {MOBILE_PRIMARY_NAV_IDS.map((id) => {
           const item = NAV_ITEMS.find((n) => n.id === id)!;

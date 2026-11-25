@@ -7,7 +7,7 @@ export const DEFAULT_TASK_TAGS: string[] = ['شغل', 'بيت', 'شخصي'];
 
 export const DEFAULT_PREFERENCES: AppPreferences = {
   theme: 'light',
-  accent: 'teal',
+  accent: 'blue',
   userName: 'عمر',
   defaultPriority: 'متوسط',
   taskTags: [...DEFAULT_TASK_TAGS],
@@ -137,7 +137,7 @@ const focusSessionSchema = z.object({
 
 const preferencesSchema = z.object({
   theme: z.enum(['light', 'dark']).default('light'),
-  accent: z.enum(['teal', 'blue', 'indigo', 'emerald', 'violet']).default('teal'),
+  accent: z.enum(['teal', 'blue', 'indigo', 'emerald', 'violet']).default('blue'),
   userName: z.string().min(1).max(40).default('عمر'),
   defaultPriority: z.enum(['مهم', 'متوسط', 'عادي']).default('متوسط'),
   taskTags: z.array(z.string()).default([...DEFAULT_TASK_TAGS]),

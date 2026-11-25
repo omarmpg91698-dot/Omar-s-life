@@ -320,7 +320,7 @@ const Shell: React.FC = () => {
             <button
               type="button"
               onClick={() => switchWorkspace('omar-ai')}
-              className="flex min-h-[40px] w-full items-center justify-center gap-2 rounded-xl bg-teal-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-teal-500"
+              className="flex min-h-[40px] w-full items-center justify-center gap-2 rounded-xl bg-accent px-3 text-xs font-semibold text-white transition-colors hover:bg-accent-hover"
             >
               <Smartphone className="h-3.5 w-3.5" />
               <span>فتح Omar&apos;s personal assistant</span>
@@ -713,7 +713,7 @@ const Shell: React.FC = () => {
                   setMoreSheetOpen(false);
                   switchWorkspace('omar-ai');
                 }}
-                className="flex min-h-[48px] w-full items-center justify-between rounded-2xl bg-teal-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-500"
+                className="flex min-h-[48px] w-full items-center justify-between rounded-2xl bg-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-accent-hover"
               >
                 <span className="flex items-center gap-3">
                   <Smartphone className="h-4 w-4 shrink-0" />

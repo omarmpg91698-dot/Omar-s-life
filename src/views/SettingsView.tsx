@@ -268,8 +268,8 @@ export const SettingsView: React.FC = () => {
     color: string;
     soft: string;
   }> = [
-    {id: 'teal', label: 'تيل (افتراضي)', hint: 'متوازن وهادي', color: '#0d9488', soft: '#ccfbf1'},
-    {id: 'blue', label: 'أزرق', hint: 'واضح وعملي', color: '#2563eb', soft: '#dbeafe'},
+    {id: 'teal', label: 'تيل', hint: 'متوازن وهادي', color: '#0d9488', soft: '#ccfbf1'},
+    {id: 'blue', label: 'أزرق (افتراضي)', hint: 'واضح وعملي', color: '#2563eb', soft: '#dbeafe'},
     {id: 'indigo', label: 'نيلي', hint: 'مركز ومريح', color: '#4f46e5', soft: '#e0e7ff'},
     {id: 'emerald', label: 'زمردي', hint: 'منعش ومشرق', color: '#059669', soft: '#d1fae5'},
     {id: 'violet', label: 'بنفسجي', hint: 'عصري ومميز', color: '#7c3aed', soft: '#ede9fe'},
@@ -386,12 +386,12 @@ export const SettingsView: React.FC = () => {
                 ))}
               </select>
 
-              {preferences.accent !== 'teal' && (
+              {preferences.accent !== 'blue' && (
                 <button
                   type="button"
                   onClick={() => {
-                    updatePreferences({accent: 'teal'});
-                    setStatusMsg({type: 'ok', text: 'تم إرجاع لون التمييز الافتراضي (تيل).'});
+                    updatePreferences({accent: 'blue'});
+                    setStatusMsg({type: 'ok', text: 'تم إرجاع لون التمييز الافتراضي (أزرق).'});
                   }}
                   className="inline-flex min-h-[40px] items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-600 hover:border-accent hover:text-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
                 >

@@ -188,6 +188,31 @@ const assistantMessageSchema = z.object({
   createdAt: z.number(),
 });
 
+
+const babyAppointmentSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  date: z.string(),
+  notes: z.string().default(''),
+  done: z.boolean().default(false),
+  createdAt: z.number(),
+});
+
+const babyProfileSchema = z.object({
+  babyName: z.string().default(''),
+  dueDate: z.string().nullable().default(null),
+  birthDate: z.string().nullable().default(null),
+  appointments: z.array(babyAppointmentSchema).optional().default([]),
+  bagDone: z.array(z.string()).optional().default([]),
+  bagCustom: z
+    .array(z.object({id: z.string(), title: z.string(), done: z.boolean().default(false)}))
+    .optional()
+    .default([]),
+  vaccinesDone: z.array(z.string()).optional().default([]),
+  milestonesDone: z.array(z.string()).optional().default([]),
+  updatedAt: z.number().default(0),
+});
+
 export const storeBackupSchema = z.object({
   version: z.literal(1),
   tasks: z.array(taskSchema),
@@ -199,6 +224,7 @@ export const storeBackupSchema = z.object({
   assistantProfile: assistantProfileSchema.optional(),
   assistantMemories: z.array(assistantMemorySchema).optional().default([]),
   assistantMessages: z.array(assistantMessageSchema).optional().default([]),
+  baby: babyProfileSchema.optional(),
   preferences: preferencesSchema.optional(),
 });
 
@@ -307,6 +333,7 @@ export function loadStore(): OmarsLifeStore {
       },
       assistantMemories: parsed.data.assistantMemories ?? [],
       assistantMessages: parsed.data.assistantMessages ?? [],
+      baby: parsed.data.baby,
       preferences: {
         ...DEFAULT_PREFERENCES,
         ...parsed.data.preferences,
@@ -352,6 +379,7 @@ export function parseAndValidateBackup(rawJson: string): OmarsLifeStore {
     },
     assistantMemories: parsed.data.assistantMemories ?? [],
     assistantMessages: parsed.data.assistantMessages ?? [],
+    baby: parsed.data.baby,
     preferences: {
       ...DEFAULT_PREFERENCES,
       ...parsed.data.preferences,

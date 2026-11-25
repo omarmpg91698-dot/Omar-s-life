@@ -1,9 +1,11 @@
 import React, {useEffect, useState} from 'react';
 import {
   Archive,
+  Baby,
   Bell,
   BellRing,
   Bot,
+  BrainCircuit,
   CalendarDays,
   Check,
   CheckSquare,
@@ -35,9 +37,11 @@ import {
 import type {NavSection} from './types';
 import {ArchiveView} from './views/ArchiveView';
 import {AssistantView} from './views/AssistantView';
+import {BabyView} from './views/BabyView';
 import {CalendarView} from './views/CalendarView';
 import {DocumentsView} from './views/DocumentsView';
 import {GoalsProjectsView} from './views/GoalsProjectsView';
+import {HabitCoachView} from './views/HabitCoachView';
 import {HomeView} from './views/HomeView';
 import {NotesView} from './views/NotesView';
 import {OmarAiCompanionApp} from './views/OmarAiCompanionApp';
@@ -60,6 +64,8 @@ const NAV_ITEMS: NavItem[] = [
   {id: 'notes', label: 'ملاحظاتي', shortLabel: 'ملاحظاتي', icon: FileText},
   {id: 'documents', label: 'وثائقي', shortLabel: 'وثائقي', icon: FileBadge2},
   {id: 'goals', label: 'أهدافي ومشاريعي', shortLabel: 'أهدافي', icon: Target},
+  {id: 'baby', label: 'الطفل', shortLabel: 'الطفل', icon: Baby},
+  {id: 'coach', label: 'مدرب العادات', shortLabel: 'المدرب', icon: BrainCircuit},
   {id: 'archive', label: 'الأرشيف', shortLabel: 'الأرشيف', icon: Archive},
   {id: 'settings', label: 'الإعدادات', shortLabel: 'الإعدادات', icon: Settings},
 ];
@@ -188,6 +194,10 @@ const Shell: React.FC = () => {
         return <DocumentsView />;
       case 'goals':
         return <GoalsProjectsView />;
+      case 'baby':
+        return <BabyView />;
+      case 'coach':
+        return <HabitCoachView />;
       case 'archive':
         return <ArchiveView />;
       case 'settings':
@@ -720,7 +730,7 @@ const Shell: React.FC = () => {
                   <span>فتح Omar&apos;s personal assistant</span>
                 </span>
               </button>
-              {(['notes', 'documents', 'archive', 'settings'] as const).map((secId) => {
+              {(['baby', 'coach', 'notes', 'documents', 'archive', 'settings'] as const).map((secId) => {
                 const nav = NAV_ITEMS.find((i) => i.id === secId)!;
                 const Icon = nav.icon;
                 const active = activeSection === secId;

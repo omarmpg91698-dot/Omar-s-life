@@ -13,10 +13,12 @@ function daysAwayLabel(days: number): string {
   if (days === 2) return 'بعد بكرة';
   if (days <= 10) return `باقي ${days} أيام`;
   if (days <= 30) return `باقي ${days} يوم`;
-  const weeks = Math.round(days / 7);
-  if (days <= 60) return `باقي ${weeks} أسبوع`;
-  const months = Math.round(days / 30);
-  return `باقي ${months} شهر`;
+  const months = Math.floor(days / 30);
+  const remDays = days - months * 30;
+  const monthWord = months === 1 ? 'شهر' : months === 2 ? 'شهرين' : months <= 10 ? `${months} شهور` : `${months} شهر`;
+  if (remDays === 0) return `باقي ${monthWord}`;
+  const dayWord = remDays === 1 ? 'يوم واحد' : remDays === 2 ? 'يومين' : remDays <= 10 ? `${remDays} أيام` : `${remDays} يوم`;
+  return `باقي ${monthWord} و ${dayWord}`;
 }
 
 export const OccasionsCard: React.FC<OccasionsCardProps> = ({onOpenCalendar}) => {

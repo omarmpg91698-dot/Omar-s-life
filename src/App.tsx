@@ -438,7 +438,7 @@ const Shell: React.FC = () => {
         {/* Main Content Column */}
         <div className="flex min-w-0 flex-1 flex-col">
           {/* Mobile & Tablet Top Header */}
-          <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-2 border-b border-slate-200/80 bg-white/95 px-3 backdrop-blur-md dark:border-slate-800 dark:bg-slate-800/90 lg:hidden">
+          <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-2 border-b border-slate-200/80 bg-white px-3 dark:border-slate-800 dark:bg-slate-800 lg:hidden">
             <button
               type="button"
               onClick={() => setActiveSection('home')}
@@ -449,7 +449,6 @@ const Shell: React.FC = () => {
             </button>
 
             <div className="flex shrink-0 items-center gap-1.5">
-              <PWAInstallButton variant="header" />
               <button
                 type="button"
                 onClick={() => {

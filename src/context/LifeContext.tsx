@@ -7,6 +7,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import {migrateInlineImages} from '../storage/imageStore';
 import {
   DEFAULT_TASK_TAGS,
   createEmptyStore,
@@ -109,6 +110,7 @@ interface LifeContextValue {
   store: OmarsLifeStore;
   /** Active (non-archived) tasks */
   tasks: TaskItem[];
+  deletedTasks: TaskItem[];
   /** Archived tasks sorted newest archived first */
   archivedTasks: TaskItem[];
   /** All tasks (active + archived) for analytics, search, and export */
@@ -150,6 +152,8 @@ interface LifeContextValue {
     updates: Array<{id: string; patch: Partial<Omit<TaskItem, 'id' | 'createdAt'>>}>,
   ) => void;
   archiveTask: (id: string) => void;
+  softDeleteTask: (id: string) => void;
+  restoreDeletedTask: (id: string) => void;
   bulkAddTagToTasks: (ids: string[], tag: string) => void;
   bulkArchiveTasks: (ids: string[]) => void;
   bulkDeleteTasks: (ids: string[]) => void;
@@ -438,6 +442,40 @@ export const LifeProvider: React.FC<{children: React.ReactNode}> = ({children}) 
     setStorageQuotaExceeded(!saved);
   }, [store]);
 
+  // Purge tasks that sat in the trash for more than 30 days (once on app start)
+  useEffect(() => {
+    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    setStore((prev) => {
+      if (!prev.tasks.some((t) => t.deletedAt != null && t.deletedAt < cutoff)) return prev;
+      const now = Date.now();
+      const nextTasks = prev.tasks.filter((t) => !(t.deletedAt != null && t.deletedAt < cutoff));
+      return {...prev, tasks: nextTasks, goals: syncLinkedGoalsProgress(nextTasks, prev.goals, now)};
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Move any inline (base64) note images into IndexedDB so the main data blob
+  // stays tiny; runs once after load and after every restore that brings new
+  // inline images.
+  useEffect(() => {
+    let cancelled = false;
+    const hasInline = store.notes.some((n) =>
+      (n.images ?? []).some((img) => img.dataUrl && img.storage !== 'idb'),
+    );
+    if (!hasInline) return;
+    const timer = window.setTimeout(() => {
+      void migrateInlineImages(store.notes).then((nextNotes) => {
+        if (cancelled || !nextNotes) return;
+        setStore((prev) => ({...prev, notes: nextNotes}));
+      });
+    }, 1200);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store.notes]);
+
   // Periodic background sweep while the app remains open (once per hour)
   useEffect(() => {
     if (!(store.preferences.autoArchiveEnabled ?? true)) return;
@@ -611,15 +649,23 @@ export const LifeProvider: React.FC<{children: React.ReactNode}> = ({children}) 
   }, []);
 
   const activeTasks = useMemo(
-    () => store.tasks.filter((t) => !isTaskArchived(t)),
+    () => store.tasks.filter((t) => !isTaskArchived(t) && !t.deletedAt),
     [store.tasks],
   );
 
   const archivedTasks = useMemo(
     () =>
       store.tasks
-        .filter((t) => isTaskArchived(t))
+        .filter((t) => isTaskArchived(t) && !t.deletedAt)
         .sort((a, b) => (b.archivedAt ?? b.updatedAt) - (a.archivedAt ?? a.updatedAt)),
+    [store.tasks],
+  );
+
+  const deletedTasks = useMemo(
+    () =>
+      store.tasks
+        .filter((t) => t.deletedAt != null)
+        .sort((x, y) => (y.deletedAt ?? 0) - (x.deletedAt ?? 0)),
     [store.tasks],
   );
 
@@ -830,7 +876,9 @@ export const LifeProvider: React.FC<{children: React.ReactNode}> = ({children}) 
     const idSet = new Set(ids);
     const now = Date.now();
     setStore((prev) => {
-      const nextTasks = prev.tasks.filter((t) => !idSet.has(t.id));
+      const nextTasks = prev.tasks.map((t) =>
+        idSet.has(t.id) ? {...t, deletedAt: now, updatedAt: now} : t,
+      );
       return {
         ...prev,
         tasks: nextTasks,
@@ -903,6 +951,34 @@ export const LifeProvider: React.FC<{children: React.ReactNode}> = ({children}) 
     const now = Date.now();
     setStore((prev) => {
       const nextTasks = prev.tasks.filter((t) => t.id !== id);
+      return {
+        ...prev,
+        tasks: nextTasks,
+        goals: syncLinkedGoalsProgress(nextTasks, prev.goals, now),
+      };
+    });
+  }, []);
+
+  const softDeleteTask = useCallback((id: string) => {
+    const now = Date.now();
+    setStore((prev) => {
+      const nextTasks = prev.tasks.map((t) =>
+        t.id === id ? {...t, deletedAt: now, updatedAt: now} : t,
+      );
+      return {
+        ...prev,
+        tasks: nextTasks,
+        goals: syncLinkedGoalsProgress(nextTasks, prev.goals, now),
+      };
+    });
+  }, []);
+
+  const restoreDeletedTask = useCallback((id: string) => {
+    const now = Date.now();
+    setStore((prev) => {
+      const nextTasks = prev.tasks.map((t) =>
+        t.id === id ? {...t, deletedAt: null, updatedAt: now} : t,
+      );
       return {
         ...prev,
         tasks: nextTasks,
@@ -1390,6 +1466,7 @@ export const LifeProvider: React.FC<{children: React.ReactNode}> = ({children}) 
         store,
         tasks: activeTasks,
         archivedTasks,
+        deletedTasks,
         allTasks: store.tasks,
         lastAutoArchivedCount,
         dismissAutoArchiveNotice,
@@ -1415,6 +1492,8 @@ export const LifeProvider: React.FC<{children: React.ReactNode}> = ({children}) 
         updateTask,
         batchUpdateTasks,
         archiveTask,
+        softDeleteTask,
+        restoreDeletedTask,
         bulkAddTagToTasks,
         bulkArchiveTasks,
         bulkDeleteTasks,

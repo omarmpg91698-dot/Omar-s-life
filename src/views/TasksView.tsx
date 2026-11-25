@@ -15,6 +15,7 @@ import {
   Layers,
   List,
   ListChecks,
+  Mic,
   Pencil,
   Plus,
   Repeat,
@@ -42,6 +43,9 @@ import {
   isTaskReminderDueToday,
 } from '../storage/localStore';
 import {RECURRENCE_LABELS} from '../storage/productivityUtils';
+import {iconForTask, TASK_ICON_OPTIONS, autoIconForTitle} from '../utils/taskIcons';
+import {parseVoiceTask} from '../utils/voiceTaskParser';
+import {captureVoiceText, isVoiceCaptureAvailable, stopVoiceCapture, voiceErrorMessage} from '../services/androidSpeech';
 import {
   suggestSmartTaskTags,
   type SmartTagSuggestion,
@@ -149,6 +153,9 @@ export const TasksView: React.FC = () => {
     addTask,
     updateTask,
     archiveTask,
+    softDeleteTask,
+    restoreDeletedTask,
+    deletedTasks,
     bulkAddTagToTasks,
     bulkArchiveTasks,
     bulkDeleteTasks,
@@ -159,13 +166,56 @@ export const TasksView: React.FC = () => {
     clearFocusedItem,
   } = useLife();
   const todayIso = getTodayIso();
+  const allTasksForPicker = useMemo(() => [...tasks, ...deletedTasks], [tasks, deletedTasks]);
   const [highlightedTaskId, setHighlightedTaskId] = useState<string | null>(null);
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
+  const [showTrash, setShowTrash] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<TaskItem | null>(null);
+  const [confirmPermanent, setConfirmPermanent] = useState<TaskItem | null>(null);
+  const [iconPickerTaskId, setIconPickerTaskId] = useState<string | null>(null);
+  const [voiceListening, setVoiceListening] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNowTick(Date.now()), 30_000);
     return () => window.clearInterval(id);
   }, []);
+
+  const handleVoiceTask = async () => {
+    if (voiceListening) {
+      stopVoiceCapture();
+      setVoiceListening(false);
+      return;
+    }
+    setVoiceError(null);
+    if (!isVoiceCaptureAvailable()) {
+      setVoiceError('الإدخال الصوتي مش متاح على الجهاز ده.');
+      return;
+    }
+    setVoiceListening(true);
+    try {
+      const text = await captureVoiceText();
+      const parsed = parseVoiceTask(text);
+      if (!parsed || !parsed.title) {
+        setVoiceError('مسمعتش مهمة واضحة — جرب تقول مثلاً: «فكرني دكتور الخميس الساعة 5».');
+      } else {
+        addTask({
+          title: parsed.title,
+          dueDate: parsed.dueDate,
+          priority: preferences.defaultPriority,
+          reminderEnabled: parsed.reminderEnabled,
+          reminderTime: parsed.reminderTime,
+        });
+        setBulkFeedback(
+          `اتسجلت بالصوت: «${parsed.title}»${parsed.dueDate ? ` — ${formatFriendlyDate(parsed.dueDate)}` : ''}${parsed.reminderTime ? ` الساعة ${formatReminderTime(parsed.reminderTime)}` : ''}`,
+        );
+      }
+    } catch (err) {
+      setVoiceError(voiceErrorMessage(err instanceof Error ? err.message : 'error'));
+    } finally {
+      setVoiceListening(false);
+    }
+  };
 
   // Add form state
   const [title, setTitle] = useState('');
@@ -883,6 +933,21 @@ export const TasksView: React.FC = () => {
               <CheckCircle2 className="h-5 w-5" />
             </button>
 
+            <button
+              type="button"
+              onClick={() => setIconPickerTaskId(task.id)}
+              aria-label={`أيقونة ${task.title}`}
+              title="غيّر الأيقونة"
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent transition-transform hover:scale-105 ${
+                task.status === 'خلصت' ? 'opacity-45' : ''
+              }`}
+            >
+              {(() => {
+                const TaskBadgeIcon = iconForTask(task);
+                return <TaskBadgeIcon className="h-4.5 w-4.5" />;
+              })()}
+            </button>
+
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <span
@@ -1121,7 +1186,7 @@ export const TasksView: React.FC = () => {
             </button>
             <button
               type="button"
-              onClick={() => deleteTask(task.id)}
+              onClick={() => setConfirmDelete(task)}
               aria-label="مسح المهمة"
               className="flex min-h-[38px] min-w-[38px] items-center justify-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/30"
             >
@@ -1252,6 +1317,20 @@ export const TasksView: React.FC = () => {
               </span>
             </button>
           )}
+
+          {deletedTasks.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowTrash(true)}
+              className="inline-flex min-h-[36px] items-center gap-1.5 whitespace-nowrap rounded-xl border border-red-200/70 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:border-red-300 hover:text-red-600 dark:border-red-900/40 dark:bg-slate-800 dark:text-slate-200"
+            >
+              <Trash2 className="h-3.5 w-3.5 text-red-500" />
+              <span>المحذوفات</span>
+              <span className="font-mono text-[11px] tabular-nums text-slate-400">
+                ({deletedTasks.length})
+              </span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -1328,8 +1407,22 @@ export const TasksView: React.FC = () => {
               if (formError) setFormError('');
             }}
             placeholder="عايز تفتكر إيه النهارده؟"
-            className="min-h-[44px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-900 outline-none focus:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 sm:col-span-6"
+            className="min-h-[44px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-900 outline-none focus:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 sm:col-span-5"
           />
+          <button
+            type="button"
+            onClick={() => void handleVoiceTask()}
+            aria-label="سجّل مهمة بالصوت"
+            title="قول مثلاً: «فكرني دكتور الخميس الساعة 5»"
+            className={`inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-semibold transition-colors sm:col-span-1 ${
+              voiceListening
+                ? 'animate-pulse border-red-300 bg-red-50 text-red-600 dark:border-red-800 dark:bg-red-950/40'
+                : 'border-slate-200 bg-slate-50 text-slate-500 hover:border-accent hover:text-accent dark:border-slate-700 dark:bg-slate-900'
+            }`}
+          >
+            <Mic className="h-4 w-4" />
+            <span className="sm:hidden">{voiceListening ? 'بتسمعك...' : 'صوت'}</span>
+          </button>
           <input
             type="date"
             value={dueDate}
@@ -1349,6 +1442,17 @@ export const TasksView: React.FC = () => {
           </select>
         </div>
 
+{voiceError && (
+          <p role="alert" className="text-xs font-semibold text-red-600 dark:text-red-400">
+            {voiceError}
+          </p>
+        )}
+        {voiceListening && (
+          <p role="status" className="flex items-center gap-1.5 text-xs font-semibold text-accent">
+            <Mic className="h-3.5 w-3.5 animate-pulse" />
+            بتسمعك... اتكلم دلوقتي («فكرني دكتور الخميس الساعة 5»)
+          </p>
+        )}
         <SmartTagSuggestionsBar
           suggestions={smartTagSuggestions}
           onAcceptTag={handleAcceptSmartTag}
@@ -1890,15 +1994,29 @@ export const TasksView: React.FC = () => {
               <div className="flex-1 space-y-4 overflow-y-auto p-4 pb-32">
                 <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                   <div className="flex items-start justify-between gap-3">
-                    <h1
-                      className={`text-xl font-extrabold leading-relaxed ${
-                        task.status === 'خلصت'
-                          ? 'text-slate-400 line-through dark:text-slate-500'
-                          : 'text-slate-900 dark:text-slate-50'
-                      }`}
-                    >
-                      {task.title}
-                    </h1>
+                    <div className="flex min-w-0 items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setIconPickerTaskId(task.id)}
+                        aria-label="تغيير أيقونة المهمة"
+                        title="غيّر الأيقونة"
+                        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-accent-soft text-accent transition-transform hover:scale-105"
+                      >
+                        {(() => {
+                          const DetailIcon = iconForTask(task);
+                          return <DetailIcon className="h-5.5 w-5.5" />;
+                        })()}
+                      </button>
+                      <h1
+                        className={`text-xl font-extrabold leading-relaxed ${
+                          task.status === 'خلصت'
+                            ? 'text-slate-400 line-through dark:text-slate-500'
+                            : 'text-slate-900 dark:text-slate-50'
+                        }`}
+                      >
+                        {task.title}
+                      </h1>
+                    </div>
                     <span
                       className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold ${priorityInfo.activeButtonClass}`}
                     >
@@ -2125,10 +2243,7 @@ export const TasksView: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      deleteTask(task.id);
-                      close();
-                    }}
+                    onClick={() => setConfirmDelete(task)}
                     aria-label="مسح"
                     className="inline-flex min-h-[44px] min-w-[48px] items-center justify-center rounded-2xl bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-950/40 dark:text-red-400"
                   >
@@ -2463,6 +2578,228 @@ export const TasksView: React.FC = () => {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Delete confirmation */}
+      {confirmDelete && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-6"
+          role="alertdialog"
+          aria-modal="true"
+          aria-label="تأكيد المسح"
+          onClick={() => setConfirmDelete(null)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl dark:bg-slate-900"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">متأكد؟</h3>
+            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+              «{confirmDelete.title}» هتتنقل للمحذوفات وتفضل هناك 30 يوم — تقدر ترجّعها في أي وقت.
+            </p>
+            <div className="mt-4 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(null)}
+                className="min-h-[42px] flex-1 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 dark:border-slate-700 dark:text-slate-300"
+              >
+                تراجع
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  softDeleteTask(confirmDelete.id);
+                  if (detailTaskId === confirmDelete.id) setDetailTaskId(null);
+                  setBulkFeedback(`«${confirmDelete.title}» اتنقلت للمحذوفات — متاحة 30 يوم.`);
+                  setConfirmDelete(null);
+                }}
+                className="min-h-[42px] flex-1 rounded-xl bg-red-600 text-sm font-bold text-white hover:bg-red-700"
+              >
+                امسحها
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Permanent delete confirmation */}
+      {confirmPermanent && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-6"
+          role="alertdialog"
+          aria-modal="true"
+          aria-label="تأكيد الحذف النهائي"
+          onClick={() => setConfirmPermanent(null)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl dark:bg-slate-900"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-base font-bold text-red-600 dark:text-red-400">حذف نهائي؟</h3>
+            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+              «{confirmPermanent.title}» هتتمسح نهائياً ومش هتقدر ترجّعها تاني.
+            </p>
+            <div className="mt-4 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmPermanent(null)}
+                className="min-h-[42px] flex-1 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 dark:border-slate-700 dark:text-slate-300"
+              >
+                تراجع
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  deleteTask(confirmPermanent.id);
+                  setConfirmPermanent(null);
+                }}
+                className="min-h-[42px] flex-1 rounded-xl bg-red-600 text-sm font-bold text-white hover:bg-red-700"
+              >
+                امسح نهائي
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Icon picker */}
+      {iconPickerTaskId && (
+        <div
+          className="fixed inset-0 z-[70] flex items-end justify-center bg-black/40 sm:items-center"
+          role="dialog"
+          aria-modal="true"
+          aria-label="اختار أيقونة"
+          onClick={() => setIconPickerTaskId(null)}
+        >
+          <div
+            className="flex max-h-[75vh] w-full max-w-lg flex-col rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl dark:bg-slate-900"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                اختار أيقونة المهمة
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIconPickerTaskId(null)}
+                aria-label="قفل"
+                className="flex min-h-[38px] min-w-[38px] items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="grid grid-cols-6 gap-2 overflow-y-auto pb-2">
+              <button
+                type="button"
+                onClick={() => {
+                  updateTask(iconPickerTaskId, {icon: null});
+                  setIconPickerTaskId(null);
+                }}
+                className="flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-accent/60 bg-accent-soft/40 p-1.5 text-accent"
+              >
+                <RotateCcw className="h-5 w-5" />
+                <span className="text-[10px] font-bold">تلقائي</span>
+              </button>
+              {TASK_ICON_OPTIONS.map((opt) => {
+                const OptIcon = opt.Icon;
+                const currentTask = allTasksForPicker.find((t) => t.id === iconPickerTaskId);
+                const activeId = currentTask?.icon ?? (currentTask ? autoIconForTitle(currentTask.title) : null);
+                const isActive = currentTask?.icon ? currentTask.icon === opt.id : activeId === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    title={opt.label}
+                    aria-label={opt.label}
+                    onClick={() => {
+                      updateTask(iconPickerTaskId, {icon: opt.id});
+                      setIconPickerTaskId(null);
+                    }}
+                    className={`flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl border p-1.5 transition-colors ${
+                      isActive
+                        ? 'border-accent bg-accent-soft text-accent'
+                        : 'border-slate-200 text-slate-500 hover:border-accent hover:text-accent dark:border-slate-700 dark:text-slate-300'
+                    }`}
+                  >
+                    <OptIcon className="h-5 w-5" />
+                    <span className="text-[10px] font-medium">{opt.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Trash (المحذوفات) */}
+      {showTrash && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-slate-50 dark:bg-slate-950" dir="rtl">
+          <div className="flex items-center justify-between border-b border-slate-200/80 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900">
+            <div>
+              <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">المحذوفات</h2>
+              <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+                المهمة بتفضل هنا 30 يوم وبعدها بتتمسح نهائياً — رجّعها في أي وقت.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowTrash(false)}
+              aria-label="رجوع"
+              className="flex min-h-[38px] min-w-[38px] items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+          <div className="flex-1 space-y-2.5 overflow-y-auto p-4">
+            {deletedTasks.length === 0 && (
+              <p className="mt-10 text-center text-sm text-slate-400">المحذوفات فاضية 🎉</p>
+            )}
+            {deletedTasks.map((task) => {
+              const daysLeft = Math.max(
+                0,
+                30 - Math.floor(Math.max(0, nowTick - (task.deletedAt ?? nowTick)) / 86_400_000),
+              );
+              const TrashIcon = iconForTask(task);
+              return (
+                <div
+                  key={task.id}
+                  className="flex items-center gap-3 rounded-2xl border border-slate-200/80 bg-white p-3.5 dark:border-slate-800 dark:bg-slate-900"
+                >
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-400 dark:bg-slate-800">
+                    <TrashIcon className="h-4.5 w-4.5" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">
+                      {task.title}
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-slate-400">
+                      هتتمسح نهائياً بعد {daysLeft} يوم
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      restoreDeletedTask(task.id);
+                      setBulkFeedback(`«${task.title}» رجعت لمهامك ✅`);
+                    }}
+                    className="inline-flex min-h-[38px] items-center gap-1 rounded-xl bg-accent-soft px-2.5 text-xs font-bold text-accent"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    استرجاع
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmPermanent(task)}
+                    aria-label={`حذف نهائي ${task.title}`}
+                    className="flex min-h-[38px] min-w-[38px] items-center justify-center rounded-xl text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/30"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

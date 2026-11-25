@@ -63,14 +63,17 @@ const taskSchema = z.object({
   plannerOrder: z.number().int().optional(),
   completedAt: z.number().nullable().optional(),
   archivedAt: z.number().nullable().optional(),
+  icon: z.string().nullable().optional(),
+  deletedAt: z.number().nullable().optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
 });
 
 const noteImageSchema = z.object({
   id: z.string().min(1),
-  dataUrl: z.string().min(1),
+  dataUrl: z.string().default(''),
   name: z.string().default('صورة'),
+  storage: z.enum(['idb']).optional(),
 });
 
 const noteSchema = z.object({
@@ -253,20 +256,21 @@ export function getOffsetIso(daysFromToday: number): string {
 }
 
 export function isTaskOverdue(task: TaskItem, todayIso = getTodayIso()): boolean {
-  return Boolean(task.dueDate && task.dueDate < todayIso && task.status !== 'خلصت');
+  return Boolean(!task.deletedAt && task.dueDate && task.dueDate < todayIso && task.status !== 'خلصت');
 }
 
 export function isTaskDueToday(task: TaskItem, todayIso = getTodayIso()): boolean {
-  return task.dueDate === todayIso && task.status !== 'خلصت';
+  return !task.deletedAt && task.dueDate === todayIso && task.status !== 'خلصت';
 }
 
 export function isTaskUpcoming(task: TaskItem, todayIso = getTodayIso()): boolean {
-  return Boolean(task.dueDate && task.dueDate > todayIso && task.status !== 'خلصت');
+  return Boolean(!task.deletedAt && task.dueDate && task.dueDate > todayIso && task.status !== 'خلصت');
 }
 
 export function isTaskReminderDueToday(task: TaskItem, todayIso = getTodayIso()): boolean {
   return Boolean(
-    task.status !== 'خلصت' &&
+    !task.deletedAt &&
+      task.status !== 'خلصت' &&
       task.dueDate === todayIso &&
       (task.reminderEnabled ?? true),
   );

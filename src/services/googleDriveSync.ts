@@ -163,6 +163,108 @@ export async function deleteSyncFile(accessToken: string, fileId: string): Promi
   );
 }
 
+export const DRIVE_BACKUP_FOLDER_NAME = "Omar's Life";
+export const DRIVE_BACKUP_PREFIX = 'omars-life-backup-';
+
+export async function findOrCreateBackupFolder(accessToken: string): Promise<string> {
+  const query = `name='${DRIVE_BACKUP_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  const params = new URLSearchParams({
+    q: query,
+    spaces: 'drive',
+    fields: 'files(id,name)',
+    pageSize: '3',
+  });
+  const res = await handleDriveResponse(
+    await fetch(`${DRIVE_FILES_API}?${params.toString()}`, {
+      headers: {Authorization: `Bearer ${accessToken}`},
+    }),
+  );
+  const data = (await res.json()) as {files?: Array<{id: string}>};
+  const existing = data.files?.[0];
+  if (existing) return existing.id;
+
+  const createRes = await handleDriveResponse(
+    await fetch(`${DRIVE_FILES_API}?fields=id`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json; charset=UTF-8',
+      },
+      body: JSON.stringify({
+        name: DRIVE_BACKUP_FOLDER_NAME,
+        mimeType: 'application/vnd.google-apps.folder',
+      }),
+    }),
+  );
+  const created = (await createRes.json()) as {id: string};
+  return created.id;
+}
+
+export async function uploadJsonFileToFolder(
+  accessToken: string,
+  folderId: string,
+  fileName: string,
+  payload: string,
+): Promise<DriveSyncFileMeta> {
+  const boundary = `omars_life_backup_${Date.now().toString(36)}`;
+  const metadata = JSON.stringify({
+    name: fileName,
+    mimeType: 'application/json',
+    parents: [folderId],
+    description: "Omar's Life weekly automatic full backup",
+  });
+  const multipartBody = [
+    `--${boundary}`,
+    'Content-Type: application/json; charset=UTF-8',
+    '',
+    metadata,
+    `--${boundary}`,
+    'Content-Type: application/json; charset=UTF-8',
+    '',
+    payload,
+    `--${boundary}--`,
+  ].join('\r\n');
+  const res = await handleDriveResponse(
+    await fetch(`${DRIVE_UPLOAD_API}?uploadType=multipart&fields=id,name,modifiedTime,size`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`,
+      },
+      body: multipartBody,
+    }),
+  );
+  return (await res.json()) as DriveSyncFileMeta;
+}
+
+export async function deleteOldBackupFiles(
+  accessToken: string,
+  folderId: string,
+  keepFileId: string,
+): Promise<void> {
+  const query = `'${folderId}' in parents and name contains '${DRIVE_BACKUP_PREFIX}' and trashed=false`;
+  const params = new URLSearchParams({
+    q: query,
+    spaces: 'drive',
+    fields: 'files(id,name)',
+    pageSize: '20',
+  });
+  const res = await handleDriveResponse(
+    await fetch(`${DRIVE_FILES_API}?${params.toString()}`, {
+      headers: {Authorization: `Bearer ${accessToken}`},
+    }),
+  );
+  const data = (await res.json()) as {files?: Array<{id: string}>};
+  for (const file of data.files ?? []) {
+    if (file.id === keepFileId) continue;
+    try {
+      await deleteSyncFile(accessToken, file.id);
+    } catch {
+      // best-effort cleanup; a leftover old backup is acceptable
+    }
+  }
+}
+
 function mergeByUpdatedAt<T extends {id: string; updatedAt: number; createdAt: number}>(
   localItems: T[],
   remoteItems: T[],

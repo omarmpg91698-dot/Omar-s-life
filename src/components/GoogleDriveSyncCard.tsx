@@ -1,5 +1,6 @@
 import React, {useRef} from 'react';
 import {
+  CalendarClock,
   Cloud,
   CloudDownload,
   CloudOff,
@@ -38,6 +39,11 @@ export const GoogleDriveSyncCard: React.FC = () => {
     requestDeleteCloudBackup,
     requestImportFromFile,
     requestExportToFile,
+    weeklyAutoBackupEnabled,
+    setWeeklyAutoBackupEnabled,
+    lastAutoBackupAt,
+    autoBackupBusy,
+    runAutoBackupNow,
   } = useDriveSync();
 
   const isBusy = busyAction !== null;
@@ -129,6 +135,52 @@ export const GoogleDriveSyncCard: React.FC = () => {
           >
             <FileDown className="h-4 w-4 text-accent" />
             <span>تنزيل نسخة JSON</span>
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-2.5 rounded-xl border border-slate-200/80 bg-slate-50/80 p-4 dark:border-slate-700 dark:bg-slate-900/60">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="space-y-0.5">
+            <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-800 dark:text-slate-100">
+              <CalendarClock className="h-4 w-4 text-accent" />
+              <span>النسخ الأسبوعي التلقائي</span>
+            </p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              كل يوم سبت بنعمل نسخة كاملة من كل بياناتك (مهام وملاحظات وصور) في فولدر «Omar's Life» على Drive، والنسخة القديمة بتتبدل بالجديدة تلقائياً.
+            </p>
+            <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+              {lastAutoBackupAt
+                ? `آخر نسخة: ${formatDriveTimestamp(new Date(lastAutoBackupAt).toISOString())}`
+                : 'لسه مفيش نسخة أسبوعية — هتتعمل أول سبت أو أول مرة تسجل دخول.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setWeeklyAutoBackupEnabled(!weeklyAutoBackupEnabled)}
+            aria-pressed={weeklyAutoBackupEnabled}
+            className={`inline-flex min-h-[36px] items-center rounded-xl px-3 text-xs font-semibold transition-colors ${
+              weeklyAutoBackupEnabled
+                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'
+                : 'bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+            }`}
+          >
+            {weeklyAutoBackupEnabled ? 'شغالة' : 'متوقفة'}
+          </button>
+        </div>
+        <div>
+          <button
+            type="button"
+            onClick={() => void runAutoBackupNow()}
+            disabled={isBusy || autoBackupBusy || needsAuth}
+            className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 hover:border-accent hover:text-accent disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          >
+            {autoBackupBusy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
+            ) : (
+              <CloudUpload className="h-3.5 w-3.5 text-accent" />
+            )}
+            <span>{autoBackupBusy ? 'بترفع النسخة في الخلفية...' : 'اعمل نسخة دلوقتي'}</span>
           </button>
         </div>
       </div>

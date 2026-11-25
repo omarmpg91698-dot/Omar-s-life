@@ -11,6 +11,7 @@ import {
   CheckSquare,
   CloudUpload,
   FileText,
+  ListChecks,
   Plus,
   Target,
   Timer,
@@ -60,6 +61,30 @@ type QuickActionKind = 'task' | 'note' | 'goal' | null;
 const NOTE_CATEGORIES: NoteCategory[] = ['شخصي', 'شغل', 'أفكار', 'حاجات مهمة'];
 
 const DRIVE_REMINDER_SNOOZE_KEY = 'omars_life_drive_reminder_snooze_until';
+
+const HOME_PRIORITY_META: Record<
+  string,
+  {label: string; dotClass: string; textClass: string; borderClass: string}
+> = {
+  'مهم': {
+    label: 'مهم',
+    dotClass: 'bg-red-500 dark:bg-red-400',
+    textClass: 'text-red-600 dark:text-red-400',
+    borderClass: 'border-s-red-400 dark:border-s-red-500',
+  },
+  'متوسط': {
+    label: 'متوسط',
+    dotClass: 'bg-amber-500 dark:bg-amber-400',
+    textClass: 'text-amber-700 dark:text-amber-400',
+    borderClass: 'border-s-amber-400 dark:border-s-amber-500',
+  },
+  'عادي': {
+    label: 'عادي',
+    dotClass: 'bg-sky-500 dark:bg-sky-400',
+    textClass: 'text-sky-700 dark:text-sky-400',
+    borderClass: 'border-s-sky-400 dark:border-s-sky-500',
+  },
+};
 
 export const HomeView: React.FC = () => {
   const {
@@ -348,6 +373,75 @@ export const HomeView: React.FC = () => {
     <div className="space-y-6">
       {/* Global Instant Search Bar */}
       <GlobalSearchBar onQuickCreateFromQuery={handleQuickCreateFromSearch} />
+
+      {/* Today's tasks summary with priority colors */}
+      <section className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-slate-800/90 sm:p-5">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-slate-100">
+            <ListChecks className="h-4 w-4 text-accent" />
+            <span>مهام النهارده</span>
+          </h2>
+          <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 tabular-nums">
+            {dueTodayOrOverdue.length === 0
+              ? 'مفيش مهام النهارده 🎉'
+              : `خلصت ${dueTodayOrOverdue.filter((t) => t.status === 'خلصت').length} من ${dueTodayOrOverdue.length}`}
+          </span>
+        </div>
+        {dueTodayOrOverdue.length > 0 && (
+          <>
+            <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+              <div
+                className="h-full rounded-full bg-accent transition-all"
+                style={{
+                  width: `${Math.round(
+                    (dueTodayOrOverdue.filter((t) => t.status === 'خلصت').length /
+                      dueTodayOrOverdue.length) *
+                      100,
+                  )}%`,
+                }}
+              />
+            </div>
+            <ul className="mt-3 space-y-1.5">
+              {dueTodayOrOverdue.slice(0, 5).map((t) => {
+                const meta = HOME_PRIORITY_META[t.priority] ?? HOME_PRIORITY_META['عادي'];
+                const done = t.status === 'خلصت';
+                return (
+                  <li key={t.id}>
+                    <button
+                      type="button"
+                      onClick={() => setActiveSection('tasks')}
+                      className={`flex w-full items-center gap-2.5 rounded-xl border-s-4 bg-slate-50/80 px-3 py-2 text-start transition-colors hover:bg-slate-100 dark:bg-slate-900/60 dark:hover:bg-slate-900 ${meta.borderClass}`}
+                    >
+                      <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${meta.dotClass}`} />
+                      <span
+                        className={`min-w-0 flex-1 truncate text-[13px] font-semibold ${
+                          done
+                            ? 'text-slate-400 line-through dark:text-slate-500'
+                            : 'text-slate-800 dark:text-slate-100'
+                        }`}
+                      >
+                        {t.title}
+                      </span>
+                      <span className={`shrink-0 text-[10px] font-bold ${meta.textClass}`}>
+                        {meta.label}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            {dueTodayOrOverdue.length > 5 && (
+              <button
+                type="button"
+                onClick={() => setActiveSection('tasks')}
+                className="mt-2 text-[11px] font-bold text-accent hover:underline"
+              >
+                عرض كل المهام ({dueTodayOrOverdue.length})
+              </button>
+            )}
+          </>
+        )}
+      </section>
 
       {/* Top Operational Row: Welcome & Quick Shortcuts + Live Weather Widget */}
       <div className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-12">

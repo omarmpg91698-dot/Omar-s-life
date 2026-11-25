@@ -36,6 +36,7 @@ class MainActivity : AppCompatActivity() {
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var pendingWidgetComplete: String? = null
     private var webViewReady = false
+    private var speechBridge: AndroidSpeechBridge? = null
 
     private val fileChooserLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -197,6 +198,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.addJavascriptInterface(OmarNativeBridge(this), "OmarNative")
+        speechBridge = AndroidSpeechBridge(this@MainActivity) { js ->
+            webView.post { webView.evaluateJavascript(js, null) }
+        }
+        webView.addJavascriptInterface(speechBridge, "AndroidSpeech")
 
         setContentView(webView)
 
@@ -337,6 +342,8 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         filePathCallback?.onReceiveValue(null)
         filePathCallback = null
+        speechBridge?.destroy()
+        speechBridge = null
         webView.destroy()
         super.onDestroy()
     }

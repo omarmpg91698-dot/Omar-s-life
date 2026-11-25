@@ -1,7 +1,8 @@
-import React, {createContext, useCallback, useContext, useEffect, useMemo, useState} from 'react';
+import React, {createContext, useCallback, useContext, useEffect, useMemo, useRef, useState} from 'react';
 import type {User} from 'firebase/auth';
 import {AlertTriangle, Cloud, Loader2, ShieldAlert, X} from 'lucide-react';
 import {useLife} from './LifeContext';
+import {embedImagesIntoStore} from '../storage/imageStore';
 import {
   clearAccessToken,
   getAccessToken,
@@ -18,6 +19,10 @@ import {
   formatDriveTimestamp,
   mergeOmarsLifeStores,
   uploadSyncFile,
+  findOrCreateBackupFolder,
+  uploadJsonFileToFolder,
+  deleteOldBackupFiles,
+  DRIVE_BACKUP_PREFIX,
   type DriveSyncFileMeta,
 } from '../services/googleDriveSync';
 import type {OmarsLifeStore} from '../types';
@@ -28,6 +33,7 @@ export type DriveBusyAction =
   | 'syncing'
   | 'uploading'
   | 'downloading'
+  | 'auto-backup'
   | 'deleting';
 
 export interface DriveSyncNotice {
@@ -64,9 +70,16 @@ interface DriveSyncContextValue {
   requestDeleteCloudBackup: () => void;
   requestImportFromFile: (file: File) => Promise<void>;
   requestExportToFile: () => void;
+  weeklyAutoBackupEnabled: boolean;
+  setWeeklyAutoBackupEnabled: (on: boolean) => void;
+  lastAutoBackupAt: number | null;
+  autoBackupBusy: boolean;
+  runAutoBackupNow: () => Promise<boolean>;
 }
 
 const LAST_SYNC_META_KEY = 'omars_life_drive_last_sync_at';
+const WEEKLY_BACKUP_ENABLED_KEY = 'omars_life_weekly_backup_enabled';
+const WEEKLY_BACKUP_LAST_KEY = 'omars_life_weekly_backup_last_at';
 
 function computeStoreDigest(store: OmarsLifeStore): string {
   return JSON.stringify({
@@ -278,7 +291,7 @@ export const DriveSyncProvider: React.FC<{children: React.ReactNode}> = ({childr
             if (!activeToken) return;
             setBusyAction('syncing');
             try {
-              const saved = await uploadSyncFile(activeToken, store, null);
+              const saved = await uploadSyncFile(activeToken, await embedImagesIntoStore(store), null);
               markSynced(store, saved);
               setNotice({
                 type: 'ok',
@@ -313,7 +326,7 @@ export const DriveSyncProvider: React.FC<{children: React.ReactNode}> = ({childr
           if (!activeToken) return;
           setBusyAction('syncing');
           try {
-            const saved = await uploadSyncFile(activeToken, merged, existing.id);
+            const saved = await uploadSyncFile(activeToken, await embedImagesIntoStore(merged), existing.id);
             replaceStore(merged);
             markSynced(merged, saved);
             setNotice({
@@ -363,7 +376,7 @@ export const DriveSyncProvider: React.FC<{children: React.ReactNode}> = ({childr
           if (!activeToken) return;
           setBusyAction('uploading');
           try {
-            const saved = await uploadSyncFile(activeToken, store, existing?.id ?? null);
+            const saved = await uploadSyncFile(activeToken, await embedImagesIntoStore(store), existing?.id ?? null);
             markSynced(store, saved);
             setNotice({
               type: 'ok',
@@ -426,27 +439,136 @@ export const DriveSyncProvider: React.FC<{children: React.ReactNode}> = ({childr
     }
   }, [handleDriveError, markSynced, replaceStore, requireToken, store]);
 
+  const [weeklyAutoBackupEnabled, setWeeklyAutoBackupEnabledState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(WEEKLY_BACKUP_ENABLED_KEY) !== '0';
+    } catch {
+      return true;
+    }
+  });
+  const [lastAutoBackupAt, setLastAutoBackupAt] = useState<number | null>(() => {
+    try {
+      const v = Number(localStorage.getItem(WEEKLY_BACKUP_LAST_KEY));
+      return Number.isFinite(v) && v > 0 ? v : null;
+    } catch {
+      return null;
+    }
+  });
+  const autoBackupRunningRef = useRef(false);
+  const storeRef = useRef(store);
+  storeRef.current = store;
+  const weeklyEnabledRef = useRef(weeklyAutoBackupEnabled);
+  weeklyEnabledRef.current = weeklyAutoBackupEnabled;
+  const lastAutoBackupAtRef = useRef(lastAutoBackupAt);
+  lastAutoBackupAtRef.current = lastAutoBackupAt;
+
+  const setWeeklyAutoBackupEnabled = useCallback((on: boolean) => {
+    setWeeklyAutoBackupEnabledState(on);
+    try {
+      localStorage.setItem(WEEKLY_BACKUP_ENABLED_KEY, on ? '1' : '0');
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const performAutoBackup = useCallback(
+    async (manual: boolean): Promise<boolean> => {
+      const token = await requireToken();
+      if (!token) {
+        if (manual) {
+          setNotice({
+            type: 'info',
+            text: 'سجّل دخولك بحساب Google الأول عشان تتعمل النسخة الاحتياطية على Drive.',
+          });
+        }
+        return false;
+      }
+      setBusyAction('auto-backup');
+      try {
+        const folderId = await findOrCreateBackupFolder(token);
+        const stamp = new Date().toISOString().slice(0, 10);
+        const fileName = `${DRIVE_BACKUP_PREFIX}${stamp}.json`;
+        const payload = JSON.stringify(await embedImagesIntoStore(storeRef.current), null, 2);
+        const meta = await uploadJsonFileToFolder(token, folderId, fileName, payload);
+        await deleteOldBackupFiles(token, folderId, meta.id);
+        const now = Date.now();
+        setLastAutoBackupAt(now);
+        try {
+          localStorage.setItem(WEEKLY_BACKUP_LAST_KEY, String(now));
+        } catch {
+          // ignore
+        }
+        if (manual) {
+          const sizeKb = Math.max(1, Math.round(payload.length / 1024));
+          const sizeText =
+            sizeKb > 1024 ? `${(sizeKb / 1024).toFixed(1)} ميجا` : `${sizeKb} كيلو`;
+          setNotice({
+            type: 'ok',
+            text: `اتعملت نسخة احتياطية كاملة على Drive (فولدر «Omar's Life»، حجمها ${sizeText}) والنسخة القديمة اتمسحت.`,
+          });
+        }
+        return true;
+      } catch (err) {
+        handleDriveError(err);
+        return false;
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [handleDriveError, requireToken],
+  );
+
+  const maybeRunWeeklyAutoBackup = useCallback(() => {
+    if (!weeklyEnabledRef.current || autoBackupRunningRef.current) return;
+    const now = Date.now();
+    const last = lastAutoBackupAtRef.current;
+    const isSaturday = new Date().getDay() === 6;
+    const sameDayAsLast =
+      last !== null && new Date(last).toDateString() === new Date().toDateString();
+    const stale = last === null || now - last > 7 * 24 * 60 * 60 * 1000;
+    if ((isSaturday && !sameDayAsLast) || stale) {
+      autoBackupRunningRef.current = true;
+      void performAutoBackup(false).finally(() => {
+        autoBackupRunningRef.current = false;
+      });
+    }
+  }, [performAutoBackup]);
+
+  // Saturday backup: check on sign-in/session start and every 30 minutes while open
+  useEffect(() => {
+    if (!needsAuth && user) {
+      maybeRunWeeklyAutoBackup();
+    }
+  }, [needsAuth, user, maybeRunWeeklyAutoBackup]);
+
+  useEffect(() => {
+    const id = window.setInterval(maybeRunWeeklyAutoBackup, 30 * 60 * 1000);
+    return () => window.clearInterval(id);
+  }, [maybeRunWeeklyAutoBackup]);
+
   const requestExportToFile = useCallback(() => {
     setNotice(null);
-    try {
-      const payload = JSON.stringify(store, null, 2);
-      const blob = new Blob([payload], {type: 'application/json'});
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      const stamp = new Date().toISOString().slice(0, 10);
-      a.href = url;
-      a.download = `omars-life-backup-${stamp}.json`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      setNotice({
-        type: 'ok',
-        text: 'تم تنزيل ملف النسخة الاحتياطية (JSON). احتفظ بيه في مكان آمن.',
-      });
-    } catch {
-      setNotice({type: 'err', text: 'حصل خطأ أثناء تجهيز ملف النسخة الاحتياطية.'});
-    }
+    void (async () => {
+      try {
+        const payload = JSON.stringify(await embedImagesIntoStore(store), null, 2);
+        const blob = new Blob([payload], {type: 'application/json'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const stamp = new Date().toISOString().slice(0, 10);
+        a.href = url;
+        a.download = `omars-life-backup-${stamp}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setNotice({
+          type: 'ok',
+          text: 'تم تنزيل ملف النسخة الاحتياطية (JSON) — الصور متضمنة ومضغوطة. احتفظ بيه في مكان آمن.',
+        });
+      } catch {
+        setNotice({type: 'err', text: 'حصل خطأ أثناء تجهيز ملف النسخة الاحتياطية.'});
+      }
+    })();
   }, [store]);
 
   const requestImportFromFile = useCallback(
@@ -599,6 +721,11 @@ export const DriveSyncProvider: React.FC<{children: React.ReactNode}> = ({childr
         requestDeleteCloudBackup,
         requestImportFromFile,
         requestExportToFile,
+        weeklyAutoBackupEnabled,
+        setWeeklyAutoBackupEnabled,
+        lastAutoBackupAt,
+        autoBackupBusy: busyAction === 'auto-backup',
+        runAutoBackupNow: () => performAutoBackup(true),
       }}
     >
       {children}

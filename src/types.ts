@@ -37,6 +37,8 @@ export interface TaskItem {
   plannerOrder?: number;
   completedAt?: number | null;
   archivedAt?: number | null;
+  icon?: string | null;
+  deletedAt?: number | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -47,6 +49,7 @@ export interface NoteImage {
   id: string;
   dataUrl: string;
   name: string;
+  storage?: 'idb';
 }
 
 export interface NoteItem {

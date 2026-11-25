@@ -13,6 +13,25 @@ import {
 } from 'lucide-react';
 import {useLife} from '../context/LifeContext';
 import {captureVideoFrameToNoteImage, compressImageFile} from '../storage/imageUtils';
+import {useNoteImageSrc} from '../storage/imageStore';
+
+const NoteImg: React.FC<{img: NoteImage; className?: string; alt?: string}> = ({
+  img,
+  className,
+  alt,
+}) => {
+  const src = useNoteImageSrc(img);
+  if (!src) {
+    return (
+      <div
+        className={`flex items-center justify-center bg-slate-100 dark:bg-slate-800 ${className ?? ''}`}
+      >
+        <span className="text-[10px] text-slate-400">...</span>
+      </div>
+    );
+  }
+  return <img src={src} className={className} alt={alt ?? img.name} loading="lazy" />;
+};
 import type {NoteCategory, NoteImage, NoteItem} from '../types';
 
 const NOTE_CATEGORIES: NoteCategory[] = ['شخصي', 'شغل', 'أفكار', 'حاجات مهمة'];
@@ -386,11 +405,7 @@ export const NotesView: React.FC = () => {
                 key={img.id}
                 className="group relative h-20 w-20 overflow-hidden rounded-xl border border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-900"
               >
-                <img
-                  src={img.dataUrl}
-                  alt={img.name}
-                  className="h-full w-full object-cover"
-                />
+                <NoteImg img={img} className="h-full w-full object-cover" />
                 <button
                   type="button"
                   onClick={() => setImages((prev) => prev.filter((item) => item.id !== img.id))}
@@ -577,12 +592,7 @@ export const NotesView: React.FC = () => {
                           aria-label={`عرض ${img.name}`}
                           className="group relative aspect-square overflow-hidden rounded-xl border border-slate-200 bg-slate-100 transition-opacity hover:opacity-90 dark:border-slate-700 dark:bg-slate-900"
                         >
-                          <img
-                            src={img.dataUrl}
-                            alt={img.name}
-                            loading="lazy"
-                            className="h-full w-full object-cover"
-                          />
+                          <NoteImg img={img} className="h-full w-full object-cover" />
                         </button>
                       ))}
                     </div>
@@ -705,11 +715,7 @@ export const NotesView: React.FC = () => {
                         key={img.id}
                         className="relative h-20 w-20 overflow-hidden rounded-xl border border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800"
                       >
-                        <img
-                          src={img.dataUrl}
-                          alt={img.name}
-                          className="h-full w-full object-cover"
-                        />
+                        <NoteImg img={img} className="h-full w-full object-cover" />
                         <button
                           type="button"
                           onClick={() =>
@@ -854,11 +860,7 @@ export const NotesView: React.FC = () => {
             >
               <X className="h-5 w-5" />
             </button>
-            <img
-              src={previewImage.dataUrl}
-              alt={previewImage.name}
-              className="max-h-[85vh] w-auto max-w-full object-contain"
-            />
+            <NoteImg img={previewImage} className="max-h-[85vh] w-auto max-w-full object-contain" />
           </div>
         </div>
       )}

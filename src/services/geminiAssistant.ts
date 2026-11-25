@@ -22,6 +22,7 @@ export interface AssistantChatResult {
 // Newest first: fall through the chain when a model is unavailable or busy.
 const MODEL_CHAIN = [
   'gemini-3-flash-preview',
+  'gemini-3.5-flash',
   'gemini-3.8-flash',
   'gemini-flash-latest',
 ];

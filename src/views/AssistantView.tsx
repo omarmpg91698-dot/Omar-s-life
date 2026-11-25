@@ -17,6 +17,7 @@ import {
   X,
 } from 'lucide-react';
 import {useLife} from '../context/LifeContext';
+import {chatWithAssistantClientSide} from '../services/geminiAssistant';
 import {
   ASSISTANT_TONE_OPTIONS,
   MEMORY_CATEGORIES,
@@ -51,6 +52,66 @@ interface ServerActionPayload {
   pinned?: boolean;
   memoryCategory?: string;
   fact?: string;
+}
+
+const GEMINI_API_KEY = ((import.meta.env.VITE_GEMINI_API_KEY as string | undefined) ?? '').trim();
+
+// Hosted (AI Studio preview) uses the server route; the installed Android
+// build has no server, so fall back to calling Gemini directly.
+async function requestAssistantReply(payload: {
+  message: string;
+  imageDataUrl?: string;
+  history: Array<{role: string; text: string}>;
+  lifeContext: Record<string, unknown>;
+}): Promise<
+  | {ok: true; reply?: string; suggestedFollowUps?: string[]; actions?: ServerActionPayload[]}
+  | {ok: false; message: string}
+> {
+  const isInstalledBuild =
+    typeof window !== 'undefined' && window.location.hostname === 'appassets.androidplatform.net';
+  let serverMessage: string | null = null;
+  if (!isInstalledBuild) {
+    try {
+      const res = await fetch('/api/assistant/chat', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        reply?: string;
+        suggestedFollowUps?: string[];
+        actions?: ServerActionPayload[];
+        message?: string;
+      };
+      if (res.ok) {
+        return {
+          ok: true,
+          reply: data.reply,
+          suggestedFollowUps: data.suggestedFollowUps,
+          actions: data.actions,
+        };
+      }
+      serverMessage = data.message || null;
+    } catch {
+      // No reachable server (installed build) - fall through to client-side.
+    }
+  }
+
+  if (!GEMINI_API_KEY) {
+    return {
+      ok: false,
+      message:
+        serverMessage || 'تعذّر الاتصال بالخادم. اتأكد من اتصال الإنترنت وجرّب تاني.',
+    };
+  }
+  const out = await chatWithAssistantClientSide({...payload, apiKey: GEMINI_API_KEY});
+  if (out.error) return {ok: false, message: out.error};
+  return {
+    ok: true,
+    reply: out.reply,
+    suggestedFollowUps: out.suggestedFollowUps,
+    actions: out.actions as ServerActionPayload[] | undefined,
+  };
 }
 
 interface SpeechRecognitionInstance {
@@ -403,59 +464,40 @@ export const AssistantView: React.FC = () => {
 
     const lifeContext = buildLifeContextSnapshot(store);
 
-    try {
-      const res = await fetch('/api/assistant/chat', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          message: cleanText,
-          imageDataUrl: imageToSend || undefined,
-          history: historyForApi,
-          lifeContext,
-        }),
-      });
+    const result = await requestAssistantReply({
+      message: cleanText,
+      imageDataUrl: imageToSend || undefined,
+      history: historyForApi,
+      lifeContext: lifeContext as unknown as Record<string, unknown>,
+    });
 
-      const data = (await res.json().catch(() => ({}))) as {
-        reply?: string;
-        suggestedFollowUps?: string[];
-        actions?: ServerActionPayload[];
-        message?: string;
-      };
-
-      if (!res.ok) {
-        setErrorMsg(
-          data.message || 'حصلت مشكلة مؤقتة في الاتصال بالمساعد الذكي. جرّب تاني.',
-        );
-        if (!overridePrompt) {
-          setInputText(cleanText);
-          if (imageToSend) setAttachedImage(imageToSend);
-        }
-        return;
+    if (!result.ok) {
+      setErrorMsg(result.message);
+      if (!overridePrompt) {
+        setInputText(cleanText);
+        if (imageToSend) setAttachedImage(imageToSend);
       }
+      setIsSending(false);
+      return;
+    }
 
+    {
       const executedLogs = executeServerActions(
-        Array.isArray(data.actions) ? data.actions : [],
+        Array.isArray(result.actions) ? result.actions : [],
       );
 
       const assistantMsg: AssistantChatMessage = {
         id: createSimpleId(),
         role: 'assistant',
-        text: data.reply || 'تمام، أنا معاك. محتاج نعمل إيه دلوقتي؟',
+        text: result.reply || 'تمام، أنا معاك. محتاج نعمل إيه دلوقتي؟',
         actions: executedLogs.length > 0 ? executedLogs : undefined,
-        suggestedFollowUps: Array.isArray(data.suggestedFollowUps)
-          ? data.suggestedFollowUps.slice(0, 3)
+        suggestedFollowUps: Array.isArray(result.suggestedFollowUps)
+          ? result.suggestedFollowUps.slice(0, 3)
           : undefined,
         createdAt: Date.now() + 1,
       };
 
       appendAssistantMessages([userMsg, assistantMsg]);
-    } catch {
-      setErrorMsg('تعذّر الاتصال بالخادم. اتأكد من اتصال الإنترنت وجرّب تاني.');
-      if (!overridePrompt) {
-        setInputText(cleanText);
-        if (imageToSend) setAttachedImage(imageToSend);
-      }
-    } finally {
       setIsSending(false);
     }
   };

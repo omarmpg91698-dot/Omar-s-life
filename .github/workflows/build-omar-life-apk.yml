@@ -20,6 +20,8 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies and build web app
+        env:
+          VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
         run: |
           if [ -f package-lock.json ]; then
             npm install --legacy-peer-deps

@@ -404,17 +404,17 @@ const Shell: React.FC = () => {
         {/* Main Content Column */}
         <div className="flex min-w-0 flex-1 flex-col">
           {/* Mobile & Tablet Top Header */}
-          <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-4 border-b border-slate-200/80 bg-white/95 px-4 backdrop-blur-md dark:border-slate-800 dark:bg-slate-800/90 lg:hidden">
+          <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-2 border-b border-slate-200/80 bg-white/95 px-3 backdrop-blur-md dark:border-slate-800 dark:bg-slate-800/90 lg:hidden">
             <button
               type="button"
               onClick={() => setActiveSection('home')}
               dir="ltr"
-              className="font-brand text-base font-bold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap shrink-0"
+              className="font-brand min-w-0 truncate text-base font-bold tracking-tight text-slate-900 dark:text-slate-100"
             >
               Omar&apos;s Life
             </button>
 
-            <div className="flex items-center gap-2">
+            <div className="flex shrink-0 items-center gap-1.5">
               <PWAInstallButton variant="header" />
               <button
                 type="button"
@@ -477,7 +477,9 @@ const Shell: React.FC = () => {
                 ) : (
                   <Moon className="h-3.5 w-3.5" />
                 )}
-                <span>{preferences.theme === 'dark' ? 'فاتح' : 'غامق'}</span>
+                <span className="hidden sm:inline">
+                  {preferences.theme === 'dark' ? 'فاتح' : 'غامق'}
+                </span>
               </button>
 
               {hasPinLock && (

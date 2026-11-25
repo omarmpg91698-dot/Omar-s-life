@@ -36,7 +36,7 @@ export interface DriveSyncNotice {
 }
 
 interface PendingConfirmAction {
-  kind: 'smart-sync' | 'upload-local' | 'restore-remote' | 'delete-remote';
+  kind: 'smart-sync' | 'upload-local' | 'restore-remote' | 'delete-remote' | 'import-file' | 'export-file';
   title: string;
   description: string;
   details: string[];
@@ -62,6 +62,8 @@ interface DriveSyncContextValue {
   requestUploadLocalToDrive: () => Promise<void>;
   requestRestoreFromDrive: () => Promise<void>;
   requestDeleteCloudBackup: () => void;
+  requestImportFromFile: (file: File) => Promise<void>;
+  requestExportToFile: () => void;
 }
 
 const LAST_SYNC_META_KEY = 'omars_life_drive_last_sync_at';
@@ -424,6 +426,109 @@ export const DriveSyncProvider: React.FC<{children: React.ReactNode}> = ({childr
     }
   }, [handleDriveError, markSynced, replaceStore, requireToken, store]);
 
+  const requestExportToFile = useCallback(() => {
+    setNotice(null);
+    try {
+      const payload = JSON.stringify(store, null, 2);
+      const blob = new Blob([payload], {type: 'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `omars-life-backup-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setNotice({
+        type: 'ok',
+        text: 'تم تنزيل ملف النسخة الاحتياطية (JSON). احتفظ بيه في مكان آمن.',
+      });
+    } catch {
+      setNotice({type: 'err', text: 'حصل خطأ أثناء تجهيز ملف النسخة الاحتياطية.'});
+    }
+  }, [store]);
+
+  const requestImportFromFile = useCallback(
+    async (file: File) => {
+      setNotice(null);
+      setBusyAction('downloading');
+      try {
+        const text = await file.text();
+        let parsed: Partial<OmarsLifeStore>;
+        try {
+          parsed = JSON.parse(text) as Partial<OmarsLifeStore>;
+        } catch {
+          setNotice({
+            type: 'err',
+            text: 'الملف ده مش JSON صالح. اختار ملف النسخة الاحتياطية الصح.',
+          });
+          return;
+        }
+        if (
+          !parsed ||
+          typeof parsed !== 'object' ||
+          (!Array.isArray(parsed.tasks) &&
+            !Array.isArray(parsed.notes) &&
+            !Array.isArray(parsed.goals))
+        ) {
+          setNotice({
+            type: 'err',
+            text: 'الملف ده مش بصيغة نسخة Omar\u2019s Life الاحتياطية (مفيش مهام ولا ملاحظات ولا أهداف).',
+          });
+          return;
+        }
+
+        const incoming: OmarsLifeStore = {
+          version: 1,
+          tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
+          notes: Array.isArray(parsed.notes) ? parsed.notes : [],
+          documents: Array.isArray(parsed.documents) ? parsed.documents : [],
+          goals: Array.isArray(parsed.goals) ? parsed.goals : [],
+          habits: Array.isArray(parsed.habits) ? parsed.habits : [],
+          focusSessions: Array.isArray(parsed.focusSessions) ? parsed.focusSessions : [],
+          assistantProfile: parsed.assistantProfile,
+          assistantMemories: Array.isArray(parsed.assistantMemories)
+            ? parsed.assistantMemories
+            : [],
+          assistantMessages: Array.isArray(parsed.assistantMessages)
+            ? parsed.assistantMessages
+            : [],
+          baby: parsed.baby,
+          preferences: parsed.preferences ?? store.preferences,
+        };
+
+        const {merged, stats} = mergeOmarsLifeStores(store, incoming);
+        // Keep the baby profile from whichever side has it (merge keeps arrays only).
+        merged.baby = incoming.baby ?? store.baby;
+
+        setPendingConfirm({
+          kind: 'import-file',
+          title: 'تأكيد استيراد النسخة الاحتياطية من الملف؟',
+          description: `هيتم دمج محتوى الملف "${file.name}" مع بيانات الجهاز الحالية مع الاحتفاظ بأحدث تعديل لكل عنصر.`,
+          details: [
+            `محتوى الملف: ${incoming.tasks.length} مهام · ${incoming.notes.length} ملاحظات · ${incoming.goals.length} أهداف ومشاريع${incoming.baby ? ' · بيانات البيبي موجودة' : ''}`,
+            `بعد الدمج: ${merged.tasks.length} مهام · ${merged.notes.length} ملاحظات · ${merged.goals.length} أهداف ومشاريع`,
+            `إضافات من الملف: +${stats.addedTasks} مهام (${stats.updatedTasks} تحديث) · +${stats.addedNotes} ملاحظات (${stats.updatedNotes} تحديث) · +${stats.addedGoals} أهداف (${stats.updatedGoals} تحديث)`,
+          ],
+          confirmLabel: 'تأكيد الاستيراد',
+          onConfirm: async () => {
+            replaceStore(merged);
+            setNotice({
+              type: 'ok',
+              text: 'تم استيراد بياناتك من الملف بنجاح! كل حاجة ظهرت في التطبيق.',
+            });
+          },
+        });
+      } catch {
+        setNotice({type: 'err', text: 'حصل خطأ أثناء قراءة الملف. جرّب تاني.'});
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [replaceStore, store],
+  );
+
   const requestDeleteCloudBackup = useCallback(() => {
     if (!remoteFile) {
       setNotice({type: 'info', text: 'مفيش نسخة سحابية موجودة على Google Drive حالياً.'});
@@ -492,6 +597,8 @@ export const DriveSyncProvider: React.FC<{children: React.ReactNode}> = ({childr
         requestUploadLocalToDrive,
         requestRestoreFromDrive,
         requestDeleteCloudBackup,
+        requestImportFromFile,
+        requestExportToFile,
       }}
     >
       {children}

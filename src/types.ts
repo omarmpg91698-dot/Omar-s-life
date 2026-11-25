@@ -174,6 +174,7 @@ export interface AssistantChatMessage {
   role: 'user' | 'assistant';
   text: string;
   hasImage?: boolean;
+  fileName?: string;
   actions?: AssistantActionLog[];
   suggestedFollowUps?: string[];
   createdAt: number;

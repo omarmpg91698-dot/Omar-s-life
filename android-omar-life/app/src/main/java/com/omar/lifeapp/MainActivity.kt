@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.View
+import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -42,6 +43,16 @@ class MainActivity : AppCompatActivity() {
             filePathCallback = null
             val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
             callback.onReceiveValue(uris)
+        }
+
+    private var pendingAudioRequest: PermissionRequest? = null
+
+    private val audioPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            pendingAudioRequest?.let { request ->
+                if (granted) request.grant(request.resources) else request.deny()
+            }
+            pendingAudioRequest = null
         }
 
     // Serve the whole origin from assets/www so Vite's root-relative paths
@@ -136,6 +147,25 @@ class MainActivity : AppCompatActivity() {
             }
 
             webChromeClient = object : WebChromeClient() {
+                override fun onPermissionRequest(request: PermissionRequest) {
+                    val wantsAudio = request.resources.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE)
+                    if (!wantsAudio) {
+                        request.deny()
+                        return
+                    }
+                    if (ContextCompat.checkSelfPermission(
+                            this@MainActivity,
+                            android.Manifest.permission.RECORD_AUDIO
+                        ) == PackageManager.PERMISSION_GRANTED
+                    ) {
+                        request.grant(request.resources)
+                    } else {
+                        pendingAudioRequest?.deny()
+                        pendingAudioRequest = request
+                        audioPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                    }
+                }
+
                 override fun onShowFileChooser(
                     webView: WebView,
                     filePathCallback: ValueCallback<Array<Uri>>,
@@ -172,6 +202,7 @@ class MainActivity : AppCompatActivity() {
 
         createNotificationChannel()
         maybeRequestNotificationPermission()
+        maybeRequestAudioPermission()
 
         onBackPressedDispatcher.addCallback(
             this,
@@ -243,6 +274,17 @@ class MainActivity : AppCompatActivity() {
                 nm.createNotificationChannel(channel)
             }
         } catch (_: Exception) {
+        }
+    }
+
+    private fun maybeRequestAudioPermission() {
+        if (pendingAudioRequest != null) return
+        if (ContextCompat.checkSelfPermission(
+                this,
+                android.Manifest.permission.RECORD_AUDIO
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            audioPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
         }
     }
 

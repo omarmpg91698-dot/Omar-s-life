@@ -1,9 +1,11 @@
-import React from 'react';
+import React, {useRef} from 'react';
 import {
   Cloud,
   CloudDownload,
   CloudOff,
   CloudUpload,
+  FileDown,
+  FileUp,
   Loader2,
   LogOut,
   RefreshCw,
@@ -34,9 +36,12 @@ export const GoogleDriveSyncCard: React.FC = () => {
     requestUploadLocalToDrive,
     requestRestoreFromDrive,
     requestDeleteCloudBackup,
+    requestImportFromFile,
+    requestExportToFile,
   } = useDriveSync();
 
   const isBusy = busyAction !== null;
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   return (
     <section
@@ -84,6 +89,49 @@ export const GoogleDriveSyncCard: React.FC = () => {
           {notice.text}
         </div>
       )}
+
+      {/* Local JSON backup (works without Google sign-in) */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-slate-300/90 bg-slate-50/60 px-3.5 py-3 dark:border-slate-600 dark:bg-slate-900/40">
+        <div className="space-y-0.5">
+          <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+            نسخة احتياطية بملف JSON
+          </p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            استورد ملف النسخة من التطبيق القديم أو نزّل نسخة من بياناتك الحالية — من غير تسجيل دخول Google.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void requestImportFromFile(f);
+              e.target.value = '';
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => importInputRef.current?.click()}
+            disabled={isBusy}
+            className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-accent px-3.5 text-xs font-semibold text-white transition-colors disabled:opacity-60"
+          >
+            <FileUp className="h-4 w-4" />
+            <span>استيراد من ملف</span>
+          </button>
+          <button
+            type="button"
+            onClick={requestExportToFile}
+            disabled={isBusy}
+            className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 hover:border-accent hover:text-accent disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          >
+            <FileDown className="h-4 w-4 text-accent" />
+            <span>تنزيل نسخة JSON</span>
+          </button>
+        </div>
+      </div>
 
       {needsAuth ? (
         <div className="flex flex-col items-start justify-between gap-4 rounded-xl border border-slate-200/80 bg-slate-50/80 p-4 sm:flex-row sm:items-center dark:border-slate-700 dark:bg-slate-900/60">

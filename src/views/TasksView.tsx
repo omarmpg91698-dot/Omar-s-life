@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   CheckSquare,
   CircleDot,
+  Clock,
   Flag,
   Layers,
   List,
@@ -94,6 +95,46 @@ const PRIORITY_META: Record<
   },
 };
 
+const PRIORITY_SORT_ORDER: Record<TaskPriority, number> = {مهم: 0, متوسط: 1, عادي: 2};
+
+function compareTasksByNearestDate(a: TaskItem, b: TaskItem): number {
+  const aDone = a.status === 'خلصت';
+  const bDone = b.status === 'خلصت';
+  if (aDone !== bDone) return aDone ? 1 : -1;
+  if (aDone) {
+    return (b.completedAt ?? b.updatedAt ?? 0) - (a.completedAt ?? a.updatedAt ?? 0);
+  }
+  if (a.dueDate && b.dueDate) {
+    if (a.dueDate !== b.dueDate) return a.dueDate < b.dueDate ? -1 : 1;
+    return (PRIORITY_SORT_ORDER[a.priority] ?? 1) - (PRIORITY_SORT_ORDER[b.priority] ?? 1);
+  }
+  if (a.dueDate) return -1;
+  if (b.dueDate) return 1;
+  const byPriority =
+    (PRIORITY_SORT_ORDER[a.priority] ?? 1) - (PRIORITY_SORT_ORDER[b.priority] ?? 1);
+  if (byPriority !== 0) return byPriority;
+  return (b.createdAt ?? 0) - (a.createdAt ?? 0);
+}
+
+function getTaskDeadlineMs(task: TaskItem): number | null {
+  if (!task.dueDate) return null;
+  const time = /^\d{2}:\d{2}$/.test(task.reminderTime ?? '') ? (task.reminderTime as string) : '23:59';
+  const ms = new Date(`${task.dueDate}T${time}:00`).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function formatRemainingTime(msDiff: number): string {
+  let rest = Math.abs(msDiff);
+  const days = Math.floor(rest / 86_400_000);
+  rest -= days * 86_400_000;
+  const hours = Math.floor(rest / 3_600_000);
+  rest -= hours * 3_600_000;
+  const minutes = Math.floor(rest / 60_000);
+  if (days > 0) return `${days} يوم و${hours} ساعة و${minutes} دقيقة`;
+  if (hours > 0) return `${hours} ساعة و${minutes} دقيقة`;
+  return `${minutes} دقيقة`;
+}
+
 export const TasksView: React.FC = () => {
   const {
     tasks,
@@ -119,6 +160,12 @@ export const TasksView: React.FC = () => {
   } = useLife();
   const todayIso = getTodayIso();
   const [highlightedTaskId, setHighlightedTaskId] = useState<string | null>(null);
+  const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNowTick(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   // Add form state
   const [title, setTitle] = useState('');
@@ -519,11 +566,13 @@ export const TasksView: React.FC = () => {
   }, [tasksMatchingNonTagFilters]);
 
   const filteredTasks = useMemo(() => {
-    return tasksMatchingNonTagFilters.filter((t) => {
-      if (effectiveTagFilter === 'الكل') return true;
-      if (effectiveTagFilter === 'من غير تصنيف') return (t.tags ?? []).length === 0;
-      return (t.tags ?? []).includes(effectiveTagFilter);
-    });
+    return tasksMatchingNonTagFilters
+      .filter((t) => {
+        if (effectiveTagFilter === 'الكل') return true;
+        if (effectiveTagFilter === 'من غير تصنيف') return (t.tags ?? []).length === 0;
+        return (t.tags ?? []).includes(effectiveTagFilter);
+      })
+      .sort(compareTasksByNearestDate);
   }, [tasksMatchingNonTagFilters, effectiveTagFilter]);
 
   const hasActiveFilters =
@@ -746,7 +795,11 @@ export const TasksView: React.FC = () => {
     const activeSwipeDx = swipeState?.id === task.id ? swipeState.dx : 0;
 
     return (
-      <div key={task.id} id={`life-item-${task.id}`} className="relative overflow-hidden">
+      <div
+        key={task.id}
+        id={`life-item-${task.id}`}
+        className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-xs transition-shadow hover:shadow-md dark:border-slate-800 dark:bg-slate-800/90"
+      >
         {/* Quick swipe reveal backdrop (right = done, left = postpone tomorrow) */}
         {activeSwipeDx !== 0 && (
           <div
@@ -843,15 +896,18 @@ export const TasksView: React.FC = () => {
                   <PriorityIcon className={`h-3.5 w-3.5 ${priorityInfo.textClass}`} />
                 </span>
 
-                <p
-                  className={`text-sm font-medium ${
+                <button
+                  type="button"
+                  onClick={() => setDetailTaskId(task.id)}
+                  aria-label={`تفاصيل ${task.title}`}
+                  className={`text-start text-sm font-medium underline-offset-4 ${
                     task.status === 'خلصت'
                       ? 'text-slate-400 line-through dark:text-slate-500'
-                      : 'text-slate-900 dark:text-slate-100'
+                      : 'text-slate-900 hover:text-accent hover:underline dark:text-slate-100'
                   }`}
                 >
                   {task.title}
-                </p>
+                </button>
                 {task.recurrence && task.recurrence !== 'none' && (
                   <span className="inline-flex items-center gap-1 rounded-md bg-accent-soft px-1.5 py-0.5 text-[11px] font-semibold text-accent">
                     <Repeat className="h-3 w-3" />
@@ -894,6 +950,36 @@ export const TasksView: React.FC = () => {
                     ? `اتأجلت (${formatFriendlyDate(task.dueDate)})`
                     : formatFriendlyDate(task.dueDate)}
                 </span>
+                {task.status !== 'خلصت' &&
+                  task.dueDate &&
+                  (() => {
+                    const deadline = getTaskDeadlineMs(task);
+                    if (deadline === null) return null;
+                    const diff = deadline - nowTick;
+                    const late = diff < 0;
+                    const soon = !late && diff < 24 * 3_600_000;
+                    return (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                            late
+                              ? 'bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-300'
+                              : soon
+                                ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
+                                : 'bg-accent-soft text-accent'
+                          }`}
+                        >
+                          <Clock className="h-3 w-3" />
+                          <span>
+                            {late
+                              ? `اتأخر ${formatRemainingTime(diff)}`
+                              : `باقي ${formatRemainingTime(diff)}`}
+                          </span>
+                        </span>
+                      </>
+                    );
+                  })()}
                 {linkedGoalTitle && (
                   <>
                     <span aria-hidden="true">·</span>
@@ -1740,10 +1826,7 @@ export const TasksView: React.FC = () => {
       ) : groupByTag ? (
         <div className="space-y-4">
           {groupedByTagSections.map((group) => (
-            <section
-              key={group.key}
-              className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white dark:border-slate-800 dark:bg-slate-800/90"
-            >
+            <section key={group.key}>
               <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/70 px-4 py-2.5 dark:border-slate-700 dark:bg-slate-900/50">
                 <div className="flex items-center gap-2">
                   <Tag className="h-3.5 w-3.5 text-accent" />
@@ -1755,19 +1838,307 @@ export const TasksView: React.FC = () => {
                   {group.items.length}
                 </span>
               </div>
-              <div className="divide-y divide-slate-100 dark:divide-slate-700">
-                {group.items.map(renderTaskRow)}
-              </div>
+              <div className="mt-2 space-y-3">{group.items.map(renderTaskRow)}</div>
             </section>
           ))}
         </div>
       ) : (
-        <div className="divide-y divide-slate-100 rounded-2xl border border-slate-200/80 bg-white dark:divide-slate-700 dark:border-slate-800 dark:bg-slate-800/90">
-          {filteredTasks.map(renderTaskRow)}
-        </div>
+        <div className="space-y-3">{filteredTasks.map(renderTaskRow)}</div>
       )}
         </>
       )}
+
+      {/* Task Details Page */}
+      {detailTaskId &&
+        (() => {
+          const task = tasks.find((t) => t.id === detailTaskId);
+          if (!task) return null;
+          const priorityInfo = PRIORITY_META[task.priority] ?? PRIORITY_META['متوسط'];
+          const PriorityIcon = priorityInfo.icon;
+          const deadline = getTaskDeadlineMs(task);
+          const diff = deadline === null ? null : deadline - nowTick;
+          const taskSubtasks = task.subtasks ?? [];
+          const doneCount = taskSubtasks.filter((st) => st.done).length;
+          const linkedGoalTitle = task.goalId ? goalsById.get(task.goalId) : undefined;
+          const fmtTs = (ts?: number | null) =>
+            ts
+              ? new Intl.DateTimeFormat('ar-EG', {
+                  dateStyle: 'medium',
+                  timeStyle: 'short',
+                }).format(new Date(ts))
+              : null;
+          const close = () => setDetailTaskId(null);
+          return (
+            <div
+              className="fixed inset-0 z-50 flex flex-col bg-slate-50 dark:bg-slate-950"
+              dir="rtl"
+            >
+              <div className="flex items-center justify-between border-b border-slate-200/80 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900">
+                <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                  تفاصيل المهمة
+                </h2>
+                <button
+                  type="button"
+                  onClick={close}
+                  aria-label="رجوع"
+                  className="flex min-h-[38px] min-w-[38px] items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="flex-1 space-y-4 overflow-y-auto p-4 pb-32">
+                <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+                  <div className="flex items-start justify-between gap-3">
+                    <h1
+                      className={`text-xl font-extrabold leading-relaxed ${
+                        task.status === 'خلصت'
+                          ? 'text-slate-400 line-through dark:text-slate-500'
+                          : 'text-slate-900 dark:text-slate-50'
+                      }`}
+                    >
+                      {task.title}
+                    </h1>
+                    <span
+                      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold ${priorityInfo.activeButtonClass}`}
+                    >
+                      <PriorityIcon className="h-3.5 w-3.5" />
+                      <span>{priorityInfo.label}</span>
+                    </span>
+                  </div>
+
+                  {task.status !== 'خلصت' && diff !== null && (
+                    <div
+                      className={`mt-4 flex items-center gap-2 rounded-2xl px-4 py-3 text-sm font-bold ${
+                        diff < 0
+                          ? 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300'
+                          : diff < 24 * 3_600_000
+                            ? 'bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300'
+                            : 'bg-accent-soft text-accent'
+                      }`}
+                    >
+                      <Clock className="h-5 w-5 shrink-0" />
+                      <span>
+                        {diff < 0
+                          ? `اتأخر ${formatRemainingTime(diff)}`
+                          : `باقي ${formatRemainingTime(diff)}`}
+                      </span>
+                    </div>
+                  )}
+
+                  <dl className="mt-4 space-y-2.5 text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="inline-flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
+                        <ListChecks className="h-4 w-4" />
+                        الحالة
+                      </dt>
+                      <dd>
+                        <select
+                          value={task.status}
+                          onChange={(e) =>
+                            updateTask(task.id, {status: e.target.value as TaskStatus})
+                          }
+                          className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                        >
+                          <option value="لسه">لسه</option>
+                          <option value="شغال عليها">شغال عليها</option>
+                          <option value="خلصت">خلصت</option>
+                        </select>
+                      </dd>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="inline-flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
+                        <CalendarDays className="h-4 w-4" />
+                        الميعاد
+                      </dt>
+                      <dd className="font-semibold text-slate-800 dark:text-slate-100">
+                        {formatFriendlyDate(task.dueDate)}
+                      </dd>
+                    </div>
+                    {task.reminderEnabled && task.reminderTime && (
+                      <div className="flex items-center justify-between gap-3">
+                        <dt className="inline-flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
+                          <Bell className="h-4 w-4" />
+                          التنبيه
+                        </dt>
+                        <dd className="font-semibold text-slate-800 dark:text-slate-100">
+                          {formatReminderTime(task.reminderTime)}
+                        </dd>
+                      </div>
+                    )}
+                    {task.recurrence && task.recurrence !== 'none' && (
+                      <div className="flex items-center justify-between gap-3">
+                        <dt className="inline-flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
+                          <Repeat className="h-4 w-4" />
+                          التكرار
+                        </dt>
+                        <dd className="font-semibold text-slate-800 dark:text-slate-100">
+                          {RECURRENCE_LABELS[task.recurrence]}
+                        </dd>
+                      </div>
+                    )}
+                    {linkedGoalTitle && (
+                      <div className="flex items-center justify-between gap-3">
+                        <dt className="inline-flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
+                          <Target className="h-4 w-4" />
+                          الهدف
+                        </dt>
+                        <dd>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              close();
+                              setActiveSection('goals');
+                            }}
+                            className="font-semibold text-amber-700 hover:underline dark:text-amber-400"
+                          >
+                            {linkedGoalTitle}
+                          </button>
+                        </dd>
+                      </div>
+                    )}
+                    {(task.tags ?? []).length > 0 && (
+                      <div className="flex items-center justify-between gap-3">
+                        <dt className="inline-flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
+                          <Tag className="h-4 w-4" />
+                          الوسوم
+                        </dt>
+                        <dd className="flex flex-wrap justify-end gap-1.5">
+                          {(task.tags ?? []).map((tag) => (
+                            <span
+                              key={tag}
+                              className="rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-bold text-accent"
+                            >
+                              #{tag}
+                            </span>
+                          ))}
+                        </dd>
+                      </div>
+                    )}
+                  </dl>
+                </div>
+
+                {taskSubtasks.length > 0 && (
+                  <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                        خطوات المهمة
+                      </h3>
+                      <span className="font-mono text-xs tabular-nums text-slate-500 dark:text-slate-400">
+                        {doneCount}/{taskSubtasks.length}
+                      </span>
+                    </div>
+                    <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                      <div
+                        className="h-full rounded-full bg-accent transition-all"
+                        style={{
+                          width: `${Math.round((doneCount / Math.max(taskSubtasks.length, 1)) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                    <ul className="space-y-2">
+                      {taskSubtasks.map((st) => (
+                        <li key={st.id}>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleInlineSubtask(task, st.id)}
+                            className="flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-start hover:bg-slate-50 dark:hover:bg-slate-800/70"
+                          >
+                            {st.done ? (
+                              <CheckSquare className="h-4.5 w-4.5 shrink-0 text-accent" />
+                            ) : (
+                              <Square className="h-4.5 w-4.5 shrink-0 text-slate-300 dark:text-slate-600" />
+                            )}
+                            <span
+                              className={`text-sm ${
+                                st.done
+                                  ? 'text-slate-400 line-through dark:text-slate-500'
+                                  : 'text-slate-800 dark:text-slate-100'
+                              }`}
+                            >
+                              {st.title}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                <div className="rounded-2xl border border-slate-200/80 bg-white p-4 text-xs text-slate-400 shadow-xs dark:border-slate-800 dark:bg-slate-900 dark:text-slate-500">
+                  <p>اتعملت: {fmtTs(task.createdAt) ?? '—'}</p>
+                  {task.updatedAt !== task.createdAt && (
+                    <p className="mt-1">آخر تعديل: {fmtTs(task.updatedAt)}</p>
+                  )}
+                  {task.completedAt && <p className="mt-1">خلصت: {fmtTs(task.completedAt)}</p>}
+                </div>
+              </div>
+
+              <div className="fixed inset-x-0 bottom-0 z-10 border-t border-slate-200/80 bg-white/95 p-3 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
+                <div className="mx-auto flex max-w-lg items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateTask(task.id, {status: task.status === 'خلصت' ? 'لسه' : 'خلصت'})
+                    }
+                    className={`inline-flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-2xl text-sm font-bold text-white ${
+                      task.status === 'خلصت'
+                        ? 'bg-slate-500 hover:bg-slate-600'
+                        : 'bg-emerald-600 hover:bg-emerald-700'
+                    }`}
+                  >
+                    <CheckCircle2 className="h-4 w-4" />
+                    {task.status === 'خلصت' ? 'رجّعها' : 'خلصتها'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      close();
+                      startEdit(task);
+                    }}
+                    aria-label="تعديل"
+                    className="inline-flex min-h-[44px] min-w-[48px] items-center justify-center rounded-2xl bg-accent-soft text-accent hover:brightness-95"
+                  >
+                    <Pencil className="h-4.5 w-4.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      close();
+                      startFocusForTask({id: task.id, title: task.title});
+                    }}
+                    aria-label="بدء تركيز"
+                    className="inline-flex min-h-[44px] min-w-[48px] items-center justify-center rounded-2xl bg-accent-soft text-accent hover:brightness-95"
+                  >
+                    <Timer className="h-4.5 w-4.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      archiveTask(task.id);
+                      close();
+                    }}
+                    aria-label="أرشفة"
+                    className="inline-flex min-h-[44px] min-w-[48px] items-center justify-center rounded-2xl bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300"
+                  >
+                    <Archive className="h-4.5 w-4.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      deleteTask(task.id);
+                      close();
+                    }}
+                    aria-label="مسح"
+                    className="inline-flex min-h-[44px] min-w-[48px] items-center justify-center rounded-2xl bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-950/40 dark:text-red-400"
+                  >
+                    <Trash2 className="h-4.5 w-4.5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
       {/* Edit Task Modal */}
       {editingTask && (

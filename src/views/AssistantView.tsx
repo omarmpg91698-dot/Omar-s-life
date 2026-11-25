@@ -10,6 +10,7 @@ import {
   Loader2,
   MessageSquare,
   Mic,
+  Paperclip,
   MicOff,
   Plus,
   SendHorizontal,
@@ -17,7 +18,11 @@ import {
   X,
 } from 'lucide-react';
 import {useLife} from '../context/LifeContext';
-import {chatWithAssistantClientSide} from '../services/geminiAssistant';
+import {
+  chatWithAssistantClientSide,
+  uploadFileToGemini,
+  type AssistantAttachment,
+} from '../services/geminiAssistant';
 import {
   ASSISTANT_TONE_OPTIONS,
   MEMORY_CATEGORIES,
@@ -61,6 +66,7 @@ const GEMINI_API_KEY = ((import.meta.env.VITE_GEMINI_API_KEY as string | undefin
 async function requestAssistantReply(payload: {
   message: string;
   imageDataUrl?: string;
+  attachments?: AssistantAttachment[];
   history: Array<{role: string; text: string}>;
   lifeContext: Record<string, unknown>;
 }): Promise<
@@ -219,6 +225,8 @@ export const AssistantView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<AssistantTab>('chat');
   const [inputText, setInputText] = useState('');
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
+  const [attachedFile, setAttachedFile] = useState<AssistantAttachment | null>(null);
+  const [isUploadingFile, setIsUploadingFile] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [isListening, setIsListening] = useState(false);
@@ -238,6 +246,7 @@ export const AssistantView: React.FC = () => {
 
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const docInputRef = useRef<HTMLInputElement | null>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
 
   const supportsVoice = useMemo(() => Boolean(getSpeechRecognitionCtor()), []);
@@ -440,20 +449,25 @@ export const AssistantView: React.FC = () => {
   const sendMessage = async (overridePrompt?: string) => {
     const cleanText = (overridePrompt ?? inputText).trim();
     const imageToSend = overridePrompt ? null : attachedImage;
-    if ((!cleanText && !imageToSend) || isSending) return;
+    const fileToSend = overridePrompt ? null : attachedFile;
+    if ((!cleanText && !imageToSend && !fileToSend) || isSending || isUploadingFile) return;
 
     setErrorMsg('');
     setIsSending(true);
     if (!overridePrompt) {
       setInputText('');
       setAttachedImage(null);
+      setAttachedFile(null);
     }
 
     const userMsg: AssistantChatMessage = {
       id: createSimpleId(),
       role: 'user',
-      text: cleanText || 'اقرأ الصورة دي وساعدني فيها',
+      text:
+        cleanText ||
+        (imageToSend ? 'اقرأ الصورة دي وساعدني فيها' : 'اقرأ الملف ده وساعدني فيه'),
       hasImage: Boolean(imageToSend),
+      fileName: fileToSend?.name,
       createdAt: Date.now(),
     };
 
@@ -467,6 +481,7 @@ export const AssistantView: React.FC = () => {
     const result = await requestAssistantReply({
       message: cleanText,
       imageDataUrl: imageToSend || undefined,
+      attachments: fileToSend ? [fileToSend] : undefined,
       history: historyForApi,
       lifeContext: lifeContext as unknown as Record<string, unknown>,
     });
@@ -476,6 +491,7 @@ export const AssistantView: React.FC = () => {
       if (!overridePrompt) {
         setInputText(cleanText);
         if (imageToSend) setAttachedImage(imageToSend);
+        if (fileToSend) setAttachedFile(fileToSend);
       }
       setIsSending(false);
       return;
@@ -512,6 +528,60 @@ export const AssistantView: React.FC = () => {
       setAttachedImage(compressed);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'تعذّر إرفاق الصورة.');
+    }
+  };
+
+  const INLINE_FILE_LIMIT = 15 * 1024 * 1024;
+
+  const handleDocPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setErrorMsg('');
+    if (file.type.startsWith('image/')) {
+      try {
+        const compressed = await compressImageToDataUrl(file);
+        setAttachedImage(compressed);
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : 'تعذّر إرفاق الصورة.');
+      }
+      return;
+    }
+    const mimeType = file.type || 'application/octet-stream';
+    if (file.size <= INLINE_FILE_LIMIT) {
+      try {
+        const buf = await file.arrayBuffer();
+        let binary = '';
+        const bytes = new Uint8Array(buf);
+        const chunk = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunk) {
+          binary += String.fromCharCode.apply(
+            null,
+            Array.from(bytes.subarray(i, i + chunk)),
+          );
+        }
+        setAttachedFile({
+          name: file.name,
+          mimeType,
+          data: btoa(binary),
+        });
+      } catch {
+        setErrorMsg('تعذّر قراءة الملف، جرّب ملف تاني.');
+      }
+      return;
+    }
+    if (!GEMINI_API_KEY) {
+      setErrorMsg('الملف أكبر من 15 ميجا — الرفع المباشر محتاج نسخة التطبيق المثبتة.');
+      return;
+    }
+    setIsUploadingFile(true);
+    try {
+      const uploaded = await uploadFileToGemini(file, GEMINI_API_KEY);
+      setAttachedFile({name: file.name, mimeType, fileUri: uploaded.uri});
+    } catch {
+      setErrorMsg('تعذّر رفع الملف الكبير. اتأكد من الإنترنت وجرّب تاني.');
+    } finally {
+      setIsUploadingFile(false);
     }
   };
 
@@ -723,6 +793,11 @@ export const AssistantView: React.FC = () => {
                           [مرفق صورة]
                         </p>
                       )}
+                      {msg.fileName && (
+                        <p className="text-[11px] font-medium opacity-85">
+                          [مرفق ملف: {msg.fileName}]
+                        </p>
+                      )}
                       <p className="whitespace-pre-wrap">{msg.text}</p>
 
                       {/* Executed Actions Receipt */}
@@ -878,6 +953,29 @@ export const AssistantView: React.FC = () => {
               </div>
             )}
 
+            {attachedFile && (
+              <div className="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-800">
+                <Paperclip className="h-5 w-5 shrink-0 text-accent" />
+                <span className="flex-1 truncate text-xs text-slate-600 dark:text-slate-300">
+                  {attachedFile.name}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setAttachedFile(null)}
+                  aria-label="إزالة الملف"
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-red-600 dark:hover:bg-slate-700"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+            {isUploadingFile && (
+              <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white p-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                <Loader2 className="h-4 w-4 animate-spin text-accent" />
+                <span>برفع الملف الكبير...</span>
+              </div>
+            )}
+
             <div className="flex items-end gap-2">
               <input
                 ref={fileInputRef}
@@ -886,6 +984,24 @@ export const AssistantView: React.FC = () => {
                 onChange={handleImagePick}
                 className="hidden"
               />
+              <input
+                ref={docInputRef}
+                type="file"
+                accept="*/*"
+                onChange={handleDocPick}
+                className="hidden"
+              />
+
+              <button
+                type="button"
+                onClick={() => docInputRef.current?.click()}
+                disabled={isSending || isUploadingFile}
+                title="إرفاق ملف (PDF، إكسل، مستند، أي صيغة)"
+                aria-label="إرفاق ملف"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition-colors hover:border-accent hover:text-accent disabled:opacity-40 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+              >
+                <Paperclip className="h-4 w-4" />
+              </button>
 
               <button
                 type="button"
@@ -935,7 +1051,7 @@ export const AssistantView: React.FC = () => {
 
               <button
                 type="submit"
-                disabled={isSending || (!inputText.trim() && !attachedImage)}
+                disabled={isSending || isUploadingFile || (!inputText.trim() && !attachedImage && !attachedFile)}
                 aria-label="إرسال"
                 className="inline-flex h-11 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl bg-accent px-4 text-xs font-semibold text-white transition-colors disabled:opacity-40"
               >

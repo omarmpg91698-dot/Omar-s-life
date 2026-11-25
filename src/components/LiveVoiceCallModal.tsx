@@ -5,6 +5,14 @@ import {
   SPECIALIST_MODE_OPTIONS,
   type SpecialistMode,
 } from '../storage/psychologyMarketingKb';
+import {
+  floatToPcm16Base64,
+  pcm16Base64ToFloat,
+  startLiveSession,
+  type LiveSessionHandle,
+} from '../services/geminiLive';
+
+const GEMINI_LIVE_KEY = ((import.meta.env.VITE_GEMINI_API_KEY as string | undefined) ?? '').trim();
 
 interface LiveVoiceCallModalProps {
   open: boolean;
@@ -43,6 +51,12 @@ export const LiveVoiceCallModal: React.FC<LiveVoiceCallModalProps> = ({
   const ttsAbortRef = useRef<AbortController | null>(null);
   const restartTimerRef = useRef<number | null>(null);
   const startListeningRef = useRef<() => void>(() => {});
+  const liveSessionRef = useRef<LiveSessionHandle | null>(null);
+  const liveModeRef = useRef(false);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const captureCtxRef = useRef<AudioContext | null>(null);
+  const playCtxRef = useRef<AudioContext | null>(null);
+  const playNextTimeRef = useRef(0);
 
   useEffect(() => {
     openRef.current = open;
@@ -211,6 +225,135 @@ export const LiveVoiceCallModal: React.FC<LiveVoiceCallModalProps> = ({
     [onSendVoiceTurn, scheduleNextListen, speakAndContinue],
   );
 
+  const teardownLive = useCallback(() => {
+    liveModeRef.current = false;
+    try {
+      liveSessionRef.current?.close();
+    } catch {
+      // ignore
+    }
+    liveSessionRef.current = null;
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach((t) => t.stop());
+      micStreamRef.current = null;
+    }
+    if (captureCtxRef.current) {
+      captureCtxRef.current.close().catch(() => {});
+      captureCtxRef.current = null;
+    }
+    if (playCtxRef.current) {
+      playCtxRef.current.close().catch(() => {});
+      playCtxRef.current = null;
+    }
+    playNextTimeRef.current = 0;
+  }, []);
+
+  const playPcm24k = useCallback((pcmBase64: string) => {
+    try {
+      if (!playCtxRef.current) {
+        const Ctor =
+          window.AudioContext ||
+          (window as unknown as {webkitAudioContext?: typeof AudioContext})
+            .webkitAudioContext;
+        if (!Ctor) return;
+        playCtxRef.current = new Ctor({sampleRate: 24000});
+        playNextTimeRef.current = 0;
+      }
+      const ctx = playCtxRef.current;
+      const samples = pcm16Base64ToFloat(pcmBase64);
+      const buf = ctx.createBuffer(1, samples.length, 24000);
+      buf.copyToChannel(samples, 0);
+      const node = ctx.createBufferSource();
+      node.buffer = buf;
+      node.connect(ctx.destination);
+      const startAt = Math.max(ctx.currentTime + 0.03, playNextTimeRef.current);
+      node.start(startAt);
+      playNextTimeRef.current = startAt + buf.duration;
+    } catch {
+      // ignore playback glitches
+    }
+  }, []);
+
+  const startLiveCall = useCallback(async () => {
+    if (!GEMINI_LIVE_KEY || !openRef.current || !navigator.mediaDevices?.getUserMedia) {
+      startListeningRef.current();
+      return;
+    }
+    setCallError(null);
+    setPhase('thinking');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {channelCount: 1, echoCancellation: true, noiseSuppression: true},
+      });
+      micStreamRef.current = stream;
+      const specialistLabel =
+        SPECIALIST_MODE_OPTIONS.find((o) => o.id === specialistMode)?.label ??
+        specialistMode;
+      const session = await startLiveSession({
+        apiKey: GEMINI_LIVE_KEY,
+        systemInstruction: [
+          `أنت المساعد الصوتي الشخصي بتاع "${userName || 'عمر'}" في تطبيق Omar's Life.`,
+          'اتكلم بنفس لغة المستخدم بالظبط وبنفس لهجته، مهما كانت (مصري، فصحى، إنجليزي، فرنساوي، أي لغة). لو كلمك بالمصري رد بالمصري الطبيعي الودود.',
+          'ردودك تكون قصيرة ومناسبة لمكالمة صوتية، من غير قوائم طويلة ولا رموز.',
+          `وضع الاستشاري الحالي: ${specialistLabel}.`,
+          'ساعده في تنظيم يومه وحياته وشغله — هو صاحب شركة MPG لمستحضرات التجميل في مصر ومراته حامل. لو طلب تعديل في التطبيق نفسه (إضافة مهمة أو ملاحظة)، قوله يكتبها في الشات عشان تتنفذ فورًا.',
+        ].join('\n'),
+        callbacks: {
+          onOpen: () => {
+            if (openRef.current) setPhase('listening');
+          },
+          onUserText: (text) => {
+            setLiveUserText(text);
+          },
+          onAiText: (text) => {
+            setLastAiReply((prev) => `${prev} ${text}`.trim().slice(-800));
+          },
+          onAudioPcm: (data) => {
+            setPhase('speaking');
+            playPcm24k(data);
+          },
+          onInterrupted: () => {
+            playNextTimeRef.current = 0;
+            setPhase('listening');
+          },
+          onTurnComplete: () => {
+            if (openRef.current && liveModeRef.current) setPhase('listening');
+          },
+          onError: (message) => {
+            setCallError(message);
+          },
+          onClose: () => {
+            if (openRef.current && liveModeRef.current) setPhase('idle');
+          },
+        },
+      });
+      liveSessionRef.current = session;
+      liveModeRef.current = true;
+
+      const Ctor =
+        window.AudioContext ||
+        (window as unknown as {webkitAudioContext?: typeof AudioContext})
+          .webkitAudioContext;
+      if (!Ctor) throw new Error('no audio context');
+      const ctx = new Ctor();
+      captureCtxRef.current = ctx;
+      const source = ctx.createMediaStreamSource(stream);
+      const processor = ctx.createScriptProcessor(4096, 1, 1);
+      processor.onaudioprocess = (ev) => {
+        if (!liveModeRef.current || mutedRef.current) return;
+        const channel = ev.inputBuffer.getChannelData(0);
+        liveSessionRef.current?.sendPcm16(floatToPcm16Base64(channel, ctx.sampleRate));
+      };
+      source.connect(processor);
+      processor.connect(ctx.destination);
+      setPhase('listening');
+    } catch {
+      teardownLive();
+      setCallError(null);
+      startListeningRef.current();
+    }
+  }, [playPcm24k, specialistMode, teardownLive, userName]);
+
   const startListening = useCallback(() => {
     if (!openRef.current || mutedRef.current) return;
 
@@ -314,6 +457,7 @@ export const LiveVoiceCallModal: React.FC<LiveVoiceCallModalProps> = ({
   // Call lifecycle & timer
   useEffect(() => {
     if (!open) {
+      teardownLive();
       stopListening();
       stopPlayback();
       setPhase('idle');
@@ -329,24 +473,37 @@ export const LiveVoiceCallModal: React.FC<LiveVoiceCallModalProps> = ({
       setElapsedSec((prev) => prev + 1);
     }, 1000);
 
-    // Start listening automatically as soon as the live call opens
+    // Open a Gemini Live voice session first (any language); fall back to
+    // the recognition+TTS loop when unavailable.
     const boot = window.setTimeout(() => {
       if (openRef.current && !mutedRef.current) {
-        startListeningRef.current();
+        void startLiveCall();
       }
     }, 220);
 
     return () => {
       window.clearInterval(timer);
       window.clearTimeout(boot);
+      teardownLive();
       stopListening();
       stopPlayback();
     };
-  }, [open, stopListening, stopPlayback]);
+  }, [open, startLiveCall, stopListening, stopPlayback, teardownLive]);
 
   // Tap big orb: barge-in interrupt when speaking, or toggle recording on fallback browsers
   const handleOrbTap = async () => {
     setCallError(null);
+    if (liveModeRef.current) {
+      if (phase === 'speaking') {
+        if (playCtxRef.current) {
+          playCtxRef.current.close().catch(() => {});
+          playCtxRef.current = null;
+        }
+        playNextTimeRef.current = 0;
+        setPhase('listening');
+      }
+      return;
+    }
     if (phase === 'speaking') {
       stopPlayback();
       if (isMuted) setIsMuted(false);

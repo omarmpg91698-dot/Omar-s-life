@@ -4,12 +4,82 @@
 // talks to the Gemini API directly with the key baked in at build time
 // (VITE_GEMINI_API_KEY, injected from a GitHub secret in CI).
 
+export interface AssistantAttachment {
+  name: string;
+  mimeType: string;
+  /** base64 payload for inline upload (small files) */
+  data?: string;
+  /** Gemini Files API uri for large uploads */
+  fileUri?: string;
+}
+
 export interface AssistantChatRequest {
   message: string;
   imageDataUrl?: string;
+  attachments?: AssistantAttachment[];
   history: Array<{role: string; text: string}>;
   lifeContext: Record<string, unknown>;
   apiKey: string;
+}
+
+const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com';
+
+/**
+ * Upload a large file through the Gemini Files API (resumable upload),
+ * then wait until it becomes ACTIVE so it can be referenced as fileData.
+ */
+export async function uploadFileToGemini(
+  file: File,
+  apiKey: string,
+): Promise<{uri: string; mimeType: string}> {
+  const mimeType = file.type || 'application/octet-stream';
+  const startRes = await fetch(`${GEMINI_API_BASE}/upload/v1beta/files?key=${apiKey}`, {
+    method: 'POST',
+    headers: {
+      'X-Goog-Upload-Protocol': 'resumable',
+      'X-Goog-Upload-Command': 'start',
+      'X-Goog-Upload-Header-Content-Length': String(file.size),
+      'X-Goog-Upload-Header-Content-Type': mimeType,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({file: {display_name: file.name || 'attachment'}}),
+  });
+  if (!startRes.ok) throw new Error(`upload start failed (${startRes.status})`);
+  const uploadUrl = startRes.headers.get('x-goog-upload-url');
+  if (!uploadUrl) throw new Error('upload url missing');
+
+  const uploadRes = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: {
+      'X-Goog-Upload-Command': 'upload, finalize',
+      'X-Goog-Upload-Offset': '0',
+      'Content-Type': mimeType,
+    },
+    body: file,
+  });
+  if (!uploadRes.ok) throw new Error(`upload failed (${uploadRes.status})`);
+  const info = (await uploadRes.json().catch(() => null)) as {
+    file?: {uri?: string; name?: string; state?: string};
+  } | null;
+  const fileName = info?.file?.name;
+  if (!fileName) throw new Error('upload response incomplete');
+
+  // Wait for the file to leave PROCESSING state (usually seconds).
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const stateRes = await fetch(`${GEMINI_API_BASE}/v1beta/${fileName}?key=${apiKey}`);
+    if (stateRes.ok) {
+      const state = ((await stateRes.json().catch(() => null)) as {
+        state?: string;
+        uri?: string;
+      } | null) ?? {};
+      if (state.state === 'ACTIVE' && state.uri) {
+        return {uri: state.uri, mimeType};
+      }
+      if (state.state === 'FAILED') throw new Error('file processing failed');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  throw new Error('file processing timed out');
 }
 
 export interface AssistantChatResult {
@@ -119,7 +189,7 @@ export function buildAssistantSystemInstruction(lifeContext: Record<string, unkn
     '3. لما المستخدم يقول معلومة شخصية جديدة ومفيدة عن حياته (زي مواعيد شغله، هدف شخصي، تفضيل، رياضة، اسم مكان أو روتين) ومش موجودة فعلاً في memories، أضف action من نوع "save_memory" عشان تتعلمها وتفتكرها في كل المحادثات الجاية.',
     '4. لما يطلب "رتّبلي يومي" أو "جدول مهامي"، استخدم "schedule_task" مع الـ taskId الحقيقي من قائمة tasks المتاحة، وحدد dueDate بصيغة YYYY-MM-DD و reminderTime بصيغة HH:MM (24 ساعة) مناسبة لروتينه والوقت الحالي.',
     '5. لما يطلب خطة لهدف جديد، استخدم "add_goal" مع initialTasks (مصفوفة من ٣ إلى ٥ مهام عملية واضحة).',
-    '6. لو رفع صورة (ورقة مكتوبة أو لقطة شاشة أو جدول)، اقرأ محتواها بدقة واقترح أو نفّذ المهام/الملاحظات المطلوبة منها.',
+    '6. لو رفع صورة أو ملف (ورقة مكتوبة، لقطة شاشة، جدول، PDF، إكسل، مستند نصي)، اقرأ محتواه بدقة واقترح أو نفّذ المهام/الملاحظات المطلوبة منه، ولخّص أهم النقاط اللي فيه.',
     '7. في حقل reply، اشرح بوضوح وبشكل مريح إيه اللي عملته أو نصحتك بيه بناءً على بياناته الحقيقية، بدون رموز برمجية أو JSON داخل reply.',
     '8. في suggestedFollowUps، اقترح ٢ أو ٣ أسئلة أو أوامر قصيرة وعملية جداً يقدر يضغط عليها فوراً.',
     '',
@@ -145,10 +215,12 @@ async function callModel(
 ): Promise<{ok: boolean; status: number; text?: string}> {
   const ctrl = new AbortController();
   const timeout = setTimeout(() => ctrl.abort(), 90_000);
-  const contents: Array<{
-    role: 'user' | 'model';
-    parts: Array<{text?: string; inlineData?: {mimeType: string; data: string}}>;
-  }> = [];
+  type Part = {
+    text?: string;
+    inlineData?: {mimeType: string; data: string};
+    fileData?: {fileUri: string; mimeType: string};
+  };
+  const contents: Array<{role: 'user' | 'model'; parts: Part[]}> = [];
 
   for (const entry of (req.history ?? []).slice(-10)) {
     if (!entry || typeof entry.text !== 'string' || !entry.text.trim()) continue;
@@ -158,15 +230,25 @@ async function callModel(
     });
   }
 
-  const currentParts: Array<{text?: string; inlineData?: {mimeType: string; data: string}}> = [];
+  const currentParts: Part[] = [];
   if (req.imageDataUrl) {
     const img = extractDataImage(req.imageDataUrl);
     if (img) currentParts.push({inlineData: img});
   }
+  for (const att of req.attachments ?? []) {
+    if (att.fileUri) {
+      currentParts.push({fileData: {fileUri: att.fileUri, mimeType: att.mimeType}});
+    } else if (att.data) {
+      currentParts.push({inlineData: {mimeType: att.mimeType, data: att.data}});
+    }
+  }
+  const hasFiles = currentParts.length > 0;
   currentParts.push({
     text:
       req.message.trim() ||
-      'اقرأ الصورة دي كويس ولخّصلي اللي فيها، ولو فيها مهام أو مواعيد مهمّة اقترح أو أضفها.',
+      (hasFiles
+        ? 'اقرأ الملف/الصورة دي كويس ولخّصلي اللي فيها، ولو فيها مهام أو مواعيد مهمّة اقترح أو أضفها.'
+        : ''),
   });
   contents.push({role: 'user', parts: currentParts});
 

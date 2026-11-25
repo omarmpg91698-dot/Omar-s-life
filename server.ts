@@ -934,14 +934,28 @@ async function startServer() {
     const body = (req.body ?? {}) as {
       message?: unknown;
       imageDataUrl?: unknown;
+      attachments?: unknown;
       history?: unknown;
       lifeContext?: unknown;
     };
 
     const userMessage = typeof body.message === 'string' ? body.message.trim() : '';
     const imageDataUrl = typeof body.imageDataUrl === 'string' ? body.imageDataUrl.trim() : '';
+    const attachments: Array<{name: string; mimeType: string; data?: string; fileUri?: string}> =
+      Array.isArray(body.attachments)
+        ? body.attachments
+            .map((a) => a as {name?: unknown; mimeType?: unknown; data?: unknown; fileUri?: unknown})
+            .filter((a) => typeof a?.mimeType === 'string' && (typeof a?.data === 'string' || typeof a?.fileUri === 'string'))
+            .slice(0, 4)
+            .map((a) => ({
+              name: typeof a.name === 'string' && a.name.trim() ? a.name.trim().slice(0, 120) : 'attachment',
+              mimeType: (a.mimeType as string).slice(0, 120),
+              data: typeof a.data === 'string' ? a.data : undefined,
+              fileUri: typeof a.fileUri === 'string' ? a.fileUri : undefined,
+            }))
+        : [];
 
-    if (!userMessage && !imageDataUrl) {
+    if (!userMessage && !imageDataUrl && attachments.length === 0) {
       res.status(400).json({
         error: 'empty_message',
         message: 'اكتب رسالتك أو أرفق صورة الأول.',
@@ -999,10 +1013,20 @@ async function startServer() {
       });
     }
 
+    for (const att of attachments) {
+      if (att.fileUri) {
+        (currentParts as Array<Record<string, unknown>>).push({
+          fileData: {fileUri: att.fileUri, mimeType: att.mimeType},
+        });
+      } else if (att.data) {
+        currentParts.push({inlineData: {mimeType: att.mimeType, data: att.data}});
+      }
+    }
+
     currentParts.push({
       text:
         userMessage ||
-        'اقرأ الصورة دي كويس ولخّصلي اللي فيها، ولو فيها مهام أو مواعيد مهمّة اقترح أو أضفها.',
+        'اقرأ الملف/الصورة دي كويس ولخّصلي اللي فيها، ولو فيها مهام أو مواعيد مهمّة اقترح أو أضفها.',
     });
 
     contents.push({role: 'user', parts: currentParts});

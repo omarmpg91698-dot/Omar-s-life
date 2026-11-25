@@ -787,7 +787,7 @@ export const HomeView: React.FC = () => {
         )}
         </section>
 
-        <div className="lg:col-span-4 space-y-4">
+        <div className="lg:col-span-4 space-y-4 lg:flex lg:flex-col">
           <WeatherWidget />
           <OccasionsCard onOpenCalendar={() => setActiveSection('calendar')} />
         </div>

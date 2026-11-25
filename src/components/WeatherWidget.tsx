@@ -490,7 +490,7 @@ export const WeatherWidget: React.FC = () => {
   return (
     <section
       aria-label="حالة الطقس الحالية"
-      className="flex h-full flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-slate-800/90"
+      className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-slate-800/90 lg:flex-1"
     >
       {/* Top Bar */}
       <div className="flex items-center justify-between gap-2">

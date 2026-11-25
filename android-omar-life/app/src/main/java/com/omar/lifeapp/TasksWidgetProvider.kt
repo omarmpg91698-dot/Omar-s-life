@@ -23,6 +23,8 @@ class TasksWidgetProvider : AppWidgetProvider() {
     }
 
     companion object {
+        const val EXTRA_WIDGET_COMPLETE = "widget_complete"
+
         fun updateAll(context: Context) {
             try {
                 val mgr = AppWidgetManager.getInstance(context)
@@ -64,18 +66,34 @@ class TasksWidgetProvider : AppWidgetProvider() {
                     if (weather.isNotEmpty()) weather else "افتح التطبيق لتحديث الطقس",
                 )
 
+                val rows = intArrayOf(R.id.widget_row_1, R.id.widget_row_2, R.id.widget_row_3)
                 val slots = intArrayOf(R.id.widget_task_1, R.id.widget_task_2, R.id.widget_task_3)
+                val checks = intArrayOf(R.id.widget_check_1, R.id.widget_check_2, R.id.widget_check_3)
                 if (tasks.isEmpty()) {
-                    views.setViewVisibility(slots[0], View.VISIBLE)
+                    views.setViewVisibility(rows[0], View.VISIBLE)
                     views.setTextViewText(slots[0], "مفيش مهام مفتوحة، يومك فاضي 🎉")
-                    for (i in 1 until slots.size) views.setViewVisibility(slots[i], View.GONE)
+                    views.setViewVisibility(checks[0], View.GONE)
+                    for (i in 1 until rows.size) views.setViewVisibility(rows[i], View.GONE)
                 } else {
-                    for (i in slots.indices) {
+                    for (i in rows.indices) {
                         if (i < tasks.size) {
-                            views.setViewVisibility(slots[i], View.VISIBLE)
-                            views.setTextViewText(slots[i], "• " + tasks[i])
+                            views.setViewVisibility(rows[i], View.VISIBLE)
+                            views.setTextViewText(slots[i], tasks[i])
+                            // ✓ completes this task: opens the app with the task
+                            // title; MainActivity forwards it to the web app.
+                            val completeIntent = Intent(context, MainActivity::class.java).apply {
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                                putExtra(EXTRA_WIDGET_COMPLETE, tasks[i])
+                            }
+                            val completePi = PendingIntent.getActivity(
+                                context,
+                                100 + i,
+                                completeIntent,
+                                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                            )
+                            views.setOnClickPendingIntent(checks[i], completePi)
                         } else {
-                            views.setViewVisibility(slots[i], View.GONE)
+                            views.setViewVisibility(rows[i], View.GONE)
                         }
                     }
                 }

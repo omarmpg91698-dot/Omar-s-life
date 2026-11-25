@@ -1,7 +1,11 @@
-import React, {useMemo} from 'react';
-import {Bot} from 'lucide-react';
+import React, {useEffect, useMemo, useState} from 'react';
+import {Bot, Sparkles} from 'lucide-react';
 import {useLife} from '../context/LifeContext';
 import {getOffsetIso, getTodayIso, isTaskOverdue} from '../storage/localStore';
+import {chatWithAssistantClientSide} from '../services/geminiAssistant';
+
+const GEMINI_API_KEY = ((import.meta.env.VITE_GEMINI_API_KEY as string | undefined) ?? '').trim();
+const AI_CACHE_KEY = 'omars_life_weekly_ai_summary';
 
 const DAY_MS = 86_400_000;
 
@@ -25,19 +29,74 @@ export const WeeklySummaryCard: React.FC = () => {
     return {doneThisWeek, overdue, comingNextWeek, habitsDoneToday, habitsTotal: habits.length};
   }, [allTasks, habits, todayIso]);
 
-  const lines: string[] = [];
-  if (summary.doneThisWeek > 0) {
+  const statsHash = JSON.stringify(summary);
+  const [aiLines, setAiLines] = useState<string[] | null>(null);
+
+  // Once per day per stats-change, ask the assistant for a personal weekly
+  // summary. Cached in localStorage so it costs one Gemini call a day at
+  // most; on any failure the deterministic lines below are shown instead.
+  useEffect(() => {
+    if (!GEMINI_API_KEY) return;
+    try {
+      const cached = JSON.parse(localStorage.getItem(AI_CACHE_KEY) ?? 'null');
+      if (cached && cached.hash === statsHash && Array.isArray(cached.lines)) {
+        setAiLines(cached.lines);
+        return;
+      }
+    } catch {
+      // ignore cache errors
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const res = await chatWithAssistantClientSide({
+          message:
+            'اكتب ملخص أسبوعي قصير بالمصري (3 سطور بالظبط، كل سطر بيبدأ بشرطة) لعمر، ودود ومشجع وشخصي، من غير أي مقدمات. ' +
+            `الإحصائيات: خلص ${summary.doneThisWeek} مهام الأسبوع اللي فات، ` +
+            `عليه ${summary.overdue} مهام متأخرة، ` +
+            `الأسبوع الجاي فيه ${summary.comingNextWeek} مهام، ` +
+            `عاداته النهارده ${summary.habitsDoneToday} من ${summary.habitsTotal}.`,
+          history: [],
+          lifeContext: {},
+          apiKey: GEMINI_API_KEY,
+        });
+        if (cancelled || res.error || !res.reply) return;
+        const lines = res.reply
+          .split('\n')
+          .map((l) => l.replace(/^[-•*\s]+/, '').trim())
+          .filter((l) => l.length > 3)
+          .slice(0, 4);
+        if (lines.length === 0) return;
+        setAiLines(lines);
+        try {
+          localStorage.setItem(AI_CACHE_KEY, JSON.stringify({hash: statsHash, lines}));
+        } catch {
+          // ignore
+        }
+      } catch {
+        // silent fallback
+      }
+    }, 4000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statsHash]);
+
+  const lines: string[] = aiLines ?? [];
+  if (aiLines === null && summary.doneThisWeek > 0) {
     lines.push(`الأسبوع اللي فات خلصت ${summary.doneThisWeek} ${summary.doneThisWeek === 1 ? 'مهمة' : 'مهام'} 👏`);
   } else {
     lines.push('الأسبوع اللي فات مفيش مهام اتقفلت، أسبوع جديد بداية جديدة 💪');
   }
-  if (summary.overdue > 0) {
+  if (aiLines === null && summary.overdue > 0) {
     lines.push(`عليك ${summary.overdue} ${summary.overdue === 1 ? 'مهمة متأخرة' : 'مهام متأخرة'}، لو خلصتها هترتاح.`);
   }
-  if (summary.comingNextWeek > 0) {
+  if (aiLines === null && summary.comingNextWeek > 0) {
     lines.push(`الأسبوع الجاي فيه ${summary.comingNextWeek} ${summary.comingNextWeek === 1 ? 'مهمة' : 'مهام'} مستنياك.`);
   }
-  if (summary.habitsTotal > 0) {
+  if (aiLines === null && summary.habitsTotal > 0) {
     lines.push(`عاداتك النهارده: ${summary.habitsDoneToday} من ${summary.habitsTotal}.`);
   }
 
@@ -51,7 +110,8 @@ export const WeeklySummaryCard: React.FC = () => {
           <Bot className="w-4 h-4 text-accent" />
           ملخص الأسبوع
         </h3>
-        <span className="text-[10px] font-medium text-slate-400 dark:text-slate-500">
+        <span className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-400 dark:text-slate-500">
+          {aiLines && <Sparkles className="w-3 h-3 text-accent" />}
           من مساعدك الشخصي لـ {preferences.userName}
         </span>
       </div>

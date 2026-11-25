@@ -33,6 +33,8 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private var pendingWidgetComplete: String? = null
+    private var webViewReady = false
 
     private val fileChooserLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -83,6 +85,11 @@ class MainActivity : AppCompatActivity() {
             }
 
             webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView, url: String) {
+                    webViewReady = true
+                    flushWidgetComplete()
+                }
+
                 override fun shouldInterceptRequest(
                     view: WebView,
                     request: WebResourceRequest
@@ -169,10 +176,45 @@ class MainActivity : AppCompatActivity() {
             }
         )
 
+        handleWidgetCompleteIntent(intent)
+
         if (savedInstanceState != null) {
             webView.restoreState(savedInstanceState)
         } else {
             webView.loadUrl(START_URL)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleWidgetCompleteIntent(intent)
+        flushWidgetComplete()
+    }
+
+    private fun handleWidgetCompleteIntent(intent: Intent?) {
+        val title = intent?.getStringExtra(TasksWidgetProvider.EXTRA_WIDGET_COMPLETE)?.trim()
+        if (!title.isNullOrEmpty()) {
+            pendingWidgetComplete = title
+            intent.removeExtra(TasksWidgetProvider.EXTRA_WIDGET_COMPLETE)
+        }
+    }
+
+    // Forward a widget ✓ tap to the web app once it is loaded; retry a few
+    // times because the app may still be booting its React tree.
+    private fun flushWidgetComplete(attempt: Int = 0) {
+        val title = pendingWidgetComplete ?: return
+        if (!webViewReady || attempt > 20) {
+            if (attempt > 20) pendingWidgetComplete = null
+            return
+        }
+        val js = "!!(window.__omarWidgetComplete && (window.__omarWidgetComplete(" +
+            org.json.JSONObject.quote(title) + "), true))"
+        webView.evaluateJavascript(js) { result ->
+            if ("true" != result) {
+                webView.postDelayed({ flushWidgetComplete(attempt + 1) }, 700)
+            } else {
+                pendingWidgetComplete = null
+            }
         }
     }
 

@@ -175,6 +175,23 @@ const Shell: React.FC = () => {
     return () => window.clearInterval(timer);
   }, [tasks, preferences.remindersEnabled]);
 
+  // The home-screen widget's ✓ button routes here through the native wrapper:
+  // mark the open task with this exact title as done.
+  useEffect(() => {
+    (window as unknown as {__omarWidgetComplete?: (title: string) => void}).__omarWidgetComplete = (
+      title: string,
+    ) => {
+      const open = tasks.filter((t) => t.status !== 'خلصت' && !t.archivedAt);
+      const target = open.find((t) => t.title === title) ?? open.find((t) => t.title.includes(title));
+      if (target) updateTask(target.id, {status: 'خلصت'});
+    };
+    return () => {
+      delete (window as unknown as {__omarWidgetComplete?: (title: string) => void})
+        .__omarWidgetComplete;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks]);
+
   // Native Android bridge: schedule day-before notifications for upcoming
   // occasions and push today's tasks + weather to the home-screen widget.
   // Both are no-ops in a plain browser.

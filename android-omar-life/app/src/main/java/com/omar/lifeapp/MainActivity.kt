@@ -198,10 +198,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.addJavascriptInterface(OmarNativeBridge(this), "OmarNative")
-        speechBridge = AndroidSpeechBridge(this@MainActivity) { js ->
+        val bridge = AndroidSpeechBridge(this@MainActivity) { js ->
             webView.post { webView.evaluateJavascript(js, null) }
         }
-        webView.addJavascriptInterface(speechBridge, "AndroidSpeech")
+        speechBridge = bridge
+        webView.addJavascriptInterface(bridge, "AndroidSpeech")
 
         setContentView(webView)
 

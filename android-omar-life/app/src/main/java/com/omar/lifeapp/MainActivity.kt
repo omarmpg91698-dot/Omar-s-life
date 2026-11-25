@@ -32,9 +32,19 @@ class MainActivity : AppCompatActivity() {
             callback.onReceiveValue(uris)
         }
 
+    // Serve the whole origin from assets/www so Vite's root-relative paths
+    // (/assets/index.js, /manifest.webmanifest, /sw.js, /icon.svg) resolve naturally.
     private val assetLoader: WebViewAssetLoader by lazy {
         WebViewAssetLoader.Builder()
-            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .addPathHandler("/") { path ->
+                val clean = path.trimStart('/')
+                val target = if (clean.isEmpty()) "www/index.html" else "www/$clean"
+                try {
+                    WebResourceResponse(guessMime(target), null, assets.open(target))
+                } catch (_: Exception) {
+                    null
+                }
+            }
             .build()
     }
 
@@ -73,25 +83,11 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     val path = uri.path.orEmpty()
-                    if (path == "/assets/www/index.html" || path == "/" || path == "/index.html") {
+                    if (path == "/" || path == "/index.html") {
                         return loadPatchedIndexHtml()
                     }
 
-                    val directResponse = assetLoader.shouldInterceptRequest(uri)
-                    if (directResponse != null) {
-                        return directResponse
-                    }
-
-                    // Support root-relative Vite asset paths (e.g. /assets/index.js, /icon.svg)
-                    val normalizedPath = path.trimStart('/')
-                    if (normalizedPath.isNotEmpty() && !normalizedPath.startsWith("assets/www/")) {
-                        val remappedUri = Uri.parse(
-                            "https://$APP_ASSETS_HOST/assets/www/$normalizedPath"
-                        )
-                        return assetLoader.shouldInterceptRequest(remappedUri)
-                    }
-
-                    return null
+                    return assetLoader.shouldInterceptRequest(uri)
                 }
 
                 override fun shouldOverrideUrlLoading(
@@ -192,7 +188,27 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val APP_ASSETS_HOST = "appassets.androidplatform.net"
-        private const val START_URL =
-            "https://appassets.androidplatform.net/assets/www/index.html"
+        private const val START_URL = "https://appassets.androidplatform.net/index.html"
+
+        private fun guessMime(path: String): String? {
+            return when (path.substringAfterLast('.', "").lowercase()) {
+                "html" -> "text/html"
+                "js", "mjs" -> "application/javascript"
+                "css" -> "text/css"
+                "json", "map" -> "application/json"
+                "webmanifest" -> "application/manifest+json"
+                "svg" -> "image/svg+xml"
+                "png" -> "image/png"
+                "jpg", "jpeg" -> "image/jpeg"
+                "webp" -> "image/webp"
+                "ico" -> "image/x-icon"
+                "woff" -> "font/woff"
+                "woff2" -> "font/woff2"
+                "ttf" -> "font/ttf"
+                "mp3" -> "audio/mpeg"
+                "mp4" -> "video/mp4"
+                else -> null
+            }
+        }
     }
 }

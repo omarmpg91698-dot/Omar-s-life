@@ -143,7 +143,7 @@ async function callModel(
   req: AssistantChatRequest,
 ): Promise<{ok: boolean; status: number; text?: string}> {
   const ctrl = new AbortController();
-  const timeout = setTimeout(() => ctrl.abort(), 30_000);
+  const timeout = setTimeout(() => ctrl.abort(), 90_000);
   const contents: Array<{
     role: 'user' | 'model';
     parts: Array<{text?: string; inlineData?: {mimeType: string; data: string}}>;
@@ -185,6 +185,7 @@ async function callModel(
         },
         generationConfig: {
           responseMimeType: 'application/json',
+          maxOutputTokens: 2500,
           responseSchema: ASSISTANT_RESPONSE_SCHEMA,
         },
       }),

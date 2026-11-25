@@ -29,6 +29,7 @@ import {DEFAULT_ASSISTANT_PROFILE} from '../storage/assistantContext';
 import type {
   AppPreferences,
   AssistantChatMessage,
+  BabyProfile,
   AssistantLifeProfile,
   AssistantMemoryCategory,
   AssistantMemoryItem,
@@ -51,6 +52,18 @@ import type {
   TaskStatus,
   TaskSubtask,
 } from '../types';
+
+const DEFAULT_BABY: BabyProfile = {
+  babyName: '',
+  dueDate: null,
+  birthDate: null,
+  appointments: [],
+  bagDone: [],
+  bagCustom: [],
+  vaccinesDone: [],
+  milestonesDone: [],
+  updatedAt: 0,
+};
 
 export interface FocusedItemTarget {
   section: 'tasks' | 'notes' | 'documents' | 'goals' | 'archive';
@@ -185,6 +198,8 @@ interface LifeContextValue {
   addHabit: (title: string) => void;
   deleteHabit: (id: string) => void;
   toggleHabitDate: (id: string, dateIso?: string) => void;
+  baby: BabyProfile;
+  updateBaby: (patch: Partial<Omit<BabyProfile, 'updatedAt'>>) => void;
   assistantProfile: AssistantLifeProfile;
   assistantMemories: AssistantMemoryItem[];
   assistantMessages: AssistantChatMessage[];
@@ -623,6 +638,8 @@ export const LifeProvider: React.FC<{children: React.ReactNode}> = ({children}) 
     () => store.assistantMessages ?? [],
     [store.assistantMessages],
   );
+
+  const baby = useMemo(() => ({...DEFAULT_BABY, ...(store.baby ?? {})}), [store.baby]);
 
   const todayFocusMinutes = useMemo(() => {
     const today = getTodayIso();
@@ -1133,6 +1150,14 @@ export const LifeProvider: React.FC<{children: React.ReactNode}> = ({children}) 
     }));
   }, []);
 
+  const updateBaby = useCallback((patch: Partial<Omit<BabyProfile, 'updatedAt'>>) => {
+    const now = Date.now();
+    setStore((prev) => ({
+      ...prev,
+      baby: {...DEFAULT_BABY, ...(prev.baby ?? {}), ...patch, updatedAt: now},
+    }));
+  }, []);
+
   const updateAssistantProfile = useCallback(
     (patch: Partial<Omit<AssistantLifeProfile, 'updatedAt'>>) => {
       const now = Date.now();
@@ -1411,6 +1436,8 @@ export const LifeProvider: React.FC<{children: React.ReactNode}> = ({children}) 
         addHabit,
         deleteHabit,
         toggleHabitDate,
+        baby,
+        updateBaby,
         assistantProfile,
         assistantMemories,
         assistantMessages,

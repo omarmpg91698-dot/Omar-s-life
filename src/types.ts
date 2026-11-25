@@ -6,6 +6,8 @@ export type NavSection =
   | 'notes'
   | 'documents'
   | 'goals'
+  | 'baby'
+  | 'coach'
   | 'archive'
   | 'settings';
 
@@ -177,6 +179,33 @@ export interface AssistantChatMessage {
   createdAt: number;
 }
 
+export interface BabyAppointment {
+  id: string;
+  title: string;
+  date: string; // YYYY-MM-DD
+  notes: string;
+  done: boolean;
+  createdAt: number;
+}
+
+export interface BabyBagCustomItem {
+  id: string;
+  title: string;
+  done: boolean;
+}
+
+export interface BabyProfile {
+  babyName: string;
+  dueDate: string | null; // YYYY-MM-DD
+  birthDate: string | null; // YYYY-MM-DD, set when the baby is born
+  appointments: BabyAppointment[];
+  bagDone: string[];
+  bagCustom: BabyBagCustomItem[];
+  vaccinesDone: string[];
+  milestonesDone: string[];
+  updatedAt: number;
+}
+
 export interface OmarsLifeStore {
   version: 1;
   tasks: TaskItem[];
@@ -188,5 +217,6 @@ export interface OmarsLifeStore {
   assistantProfile?: AssistantLifeProfile;
   assistantMemories?: AssistantMemoryItem[];
   assistantMessages?: AssistantChatMessage[];
+  baby?: BabyProfile;
   preferences: AppPreferences;
 }

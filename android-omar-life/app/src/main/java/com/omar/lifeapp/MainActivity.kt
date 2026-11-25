@@ -15,7 +15,10 @@ import android.webkit.WebViewClient
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import android.view.ViewGroup
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebViewAssetLoader
 import java.io.ByteArrayInputStream
 
@@ -124,6 +127,18 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+        }
+
+        // Keep the WebView clear of the system navigation bar (edge-to-edge is
+        // enforced on targetSdk 35+, so decorFitsSystemWindows alone is not enough).
+        ViewCompat.setOnApplyWindowInsetsListener(webView) { v, windowInsets ->
+            val bars = windowInsets.getInsets(WindowInsetsCompat.Type.navigationBars())
+            val lp = v.layoutParams as ViewGroup.MarginLayoutParams
+            if (lp.bottomMargin != bars.bottom) {
+                lp.bottomMargin = bars.bottom
+                v.layoutParams = lp
+            }
+            windowInsets
         }
 
         setContentView(webView)

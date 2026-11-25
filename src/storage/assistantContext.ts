@@ -125,14 +125,14 @@ export function buildLifeContextSnapshot(
       const aDate = a.dueDate ?? '9999-12-31';
       const bDate = b.dueDate ?? '9999-12-31';
       return aDate.localeCompare(bDate) || b.updatedAt - a.updatedAt;
-    }).slice(0, 35),
+    }).slice(0, 25),
     ...activeTasks
       .filter((t) => t.status === 'خلصت')
       .sort((a, b) => b.updatedAt - a.updatedAt)
-      .slice(0, 8),
+      .slice(0, 5),
   ];
 
-  const goalsSnapshot = store.goals.slice(0, 20).map((g) => {
+  const goalsSnapshot = store.goals.slice(0, 12).map((g) => {
     const linked = computeGoalLinkedProgress(g.id, store.tasks);
     return {
       id: g.id,
@@ -146,7 +146,7 @@ export function buildLifeContextSnapshot(
     };
   });
 
-  const habitsSnapshot = (store.habits ?? []).slice(0, 20).map((h) => {
+  const habitsSnapshot = (store.habits ?? []).slice(0, 15).map((h) => {
     const streak = computeHabitStreak(h, todayIso);
     return {
       id: h.id,
@@ -162,7 +162,7 @@ export function buildLifeContextSnapshot(
     return b.updatedAt - a.updatedAt;
   });
 
-  const recentNotes = sortedNotes.slice(0, 12).map((n) => ({
+  const recentNotes = sortedNotes.slice(0, 8).map((n) => ({
     title: n.title,
     category: n.category,
     pinned: Boolean(n.pinned),
@@ -183,7 +183,7 @@ export function buildLifeContextSnapshot(
       ...DEFAULT_ASSISTANT_PROFILE,
       ...(store.assistantProfile ?? {}),
     },
-    memories: memories.slice(0, 60).map((m) => ({
+    memories: memories.slice(0, 35).map((m) => ({
       id: m.id,
       category: m.category,
       fact: m.fact,

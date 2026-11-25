@@ -69,6 +69,7 @@ async function requestAssistantReply(payload: {
   attachments?: AssistantAttachment[];
   history: Array<{role: string; text: string}>;
   lifeContext: Record<string, unknown>;
+  onPartial?: (text: string) => void;
 }): Promise<
   | {ok: true; reply?: string; suggestedFollowUps?: string[]; actions?: ServerActionPayload[]}
   | {ok: false; message: string}
@@ -110,7 +111,10 @@ async function requestAssistantReply(payload: {
         serverMessage || 'تعذّر الاتصال بالخادم. اتأكد من اتصال الإنترنت وجرّب تاني.',
     };
   }
-  const out = await chatWithAssistantClientSide({...payload, apiKey: GEMINI_API_KEY});
+  const out = await chatWithAssistantClientSide(
+    {...payload, apiKey: GEMINI_API_KEY},
+    payload.onPartial,
+  );
   if (out.error) return {ok: false, message: out.error};
   return {
     ok: true,
@@ -228,6 +232,7 @@ export const AssistantView: React.FC = () => {
   const [attachedFile, setAttachedFile] = useState<AssistantAttachment | null>(null);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [streamingText, setStreamingText] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [isListening, setIsListening] = useState(false);
 
@@ -263,7 +268,7 @@ export const AssistantView: React.FC = () => {
     if (activeTab === 'chat') {
       chatEndRef.current?.scrollIntoView({behavior: 'smooth'});
     }
-  }, [assistantMessages.length, isSending, activeTab]);
+  }, [assistantMessages.length, isSending, streamingText, activeTab]);
 
   useEffect(() => {
     return () => {
@@ -454,6 +459,7 @@ export const AssistantView: React.FC = () => {
 
     setErrorMsg('');
     setIsSending(true);
+    setStreamingText('');
     if (!overridePrompt) {
       setInputText('');
       setAttachedImage(null);
@@ -484,9 +490,11 @@ export const AssistantView: React.FC = () => {
       attachments: fileToSend ? [fileToSend] : undefined,
       history: historyForApi,
       lifeContext: lifeContext as unknown as Record<string, unknown>,
+      onPartial: (text: string) => setStreamingText(text),
     });
 
     if (!result.ok) {
+      setStreamingText('');
       setErrorMsg(result.message);
       if (!overridePrompt) {
         setInputText(cleanText);
@@ -891,11 +899,22 @@ export const AssistantView: React.FC = () => {
               })
             )}
 
+            {isSending && streamingText.trim().length > 0 && (
+              <div className="flex items-start justify-end">
+                <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl border border-accent/20 bg-accent-soft px-4 py-3 text-sm leading-relaxed text-slate-800 dark:text-slate-100">
+                  {streamingText}
+                  <span className="ms-1 inline-block h-3.5 w-1.5 animate-pulse rounded-sm bg-accent align-middle" />
+                </div>
+              </div>
+            )}
+
             {isSending && (
               <div className="flex items-center justify-end">
                 <div className="inline-flex items-center gap-2 rounded-2xl border border-slate-200/80 bg-slate-50 px-4 py-3 text-xs font-medium text-slate-600 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-300">
                   <Loader2 className="h-4 w-4 animate-spin text-accent" />
-                  <span>بيفكر وبيراجع بياناتك...</span>
+                  <span>
+                    {streamingText.trim().length > 0 ? 'بيكمّل التفاصيل...' : 'بيفكر وبيراجع بياناتك...'}
+                  </span>
                 </div>
               </div>
             )}

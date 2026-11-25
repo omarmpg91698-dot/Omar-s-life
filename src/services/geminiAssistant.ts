@@ -89,13 +89,16 @@ export interface AssistantChatResult {
   error?: string;
 }
 
-// Newest first: fall through the chain when a model is unavailable or busy.
+// Fastest first: fall through the chain when a model is unavailable or busy.
+// 2.5 flash models get thinking switched off for near-instant first tokens.
 const MODEL_CHAIN = [
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
   'gemini-3-flash-preview',
-  'gemini-3.5-flash',
-  'gemini-3.8-flash',
   'gemini-flash-latest',
 ];
+
+const MODEL_TIMEOUT_MS = 25_000;
 
 const ASSISTANT_RESPONSE_SCHEMA = {
   type: 'OBJECT',
@@ -209,12 +212,44 @@ function extractDataImage(imageDataUrl: string): {mimeType: string; data: string
   };
 }
 
+// Pull the live "reply" value out of a partially-received JSON buffer so the
+// chat bubble can show the answer while the model is still writing it.
+function extractPartialReply(buffer: string): string | null {
+  const m = /"reply"\s*:\s*"/.exec(buffer);
+  if (!m) return null;
+  let i = m.index + m[0].length;
+  let out = '';
+  while (i < buffer.length) {
+    const c = buffer[i];
+    if (c === '\\') {
+      const n = buffer[i + 1];
+      if (n === undefined) break;
+      if (n === 'n') out += '\n';
+      else if (n === 't') out += '\t';
+      else if (n === 'r') out += '\r';
+      else if (n === 'u') {
+        const hex = buffer.slice(i + 2, i + 6);
+        if (hex.length < 4 || !/^[0-9a-fA-F]{4}$/.test(hex)) break;
+        out += String.fromCharCode(parseInt(hex, 16));
+        i += 4;
+      } else out += n;
+      i += 2;
+      continue;
+    }
+    if (c === '"') break;
+    out += c;
+    i++;
+  }
+  return out.length > 0 ? out : null;
+}
+
 async function callModel(
   model: string,
   req: AssistantChatRequest,
+  onPartial?: (text: string) => void,
 ): Promise<{ok: boolean; status: number; text?: string}> {
   const ctrl = new AbortController();
-  const timeout = setTimeout(() => ctrl.abort(), 90_000);
+  const timeout = setTimeout(() => ctrl.abort(), MODEL_TIMEOUT_MS);
   type Part = {
     text?: string;
     inlineData?: {mimeType: string; data: string};
@@ -222,11 +257,11 @@ async function callModel(
   };
   const contents: Array<{role: 'user' | 'model'; parts: Part[]}> = [];
 
-  for (const entry of (req.history ?? []).slice(-10)) {
+  for (const entry of (req.history ?? []).slice(-6)) {
     if (!entry || typeof entry.text !== 'string' || !entry.text.trim()) continue;
     contents.push({
       role: entry.role === 'assistant' ? 'model' : 'user',
-      parts: [{text: entry.text.slice(0, 1500)}],
+      parts: [{text: entry.text.slice(0, 1000)}],
     });
   }
 
@@ -252,9 +287,10 @@ async function callModel(
   });
   contents.push({role: 'user', parts: currentParts});
 
+  const is25 = model.startsWith('gemini-2.5') || model === 'gemini-flash-latest';
   try {
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`,
     {
       method: 'POST',
       headers: {
@@ -268,21 +304,68 @@ async function callModel(
         },
         generationConfig: {
           responseMimeType: 'application/json',
-          maxOutputTokens: 2500,
+          maxOutputTokens: 1800,
           responseSchema: ASSISTANT_RESPONSE_SCHEMA,
+          ...(is25 ? {thinkingConfig: {thinkingBudget: 0}} : {}),
         },
       }),
       signal: ctrl.signal,
     });
+    if (!res.ok) {
+      clearTimeout(timeout);
+      return {ok: false, status: res.status};
+    }
+
+    // Read the SSE stream: accumulate candidate text and surface the partial
+    // reply as it grows.
+    const reader = res.body?.getReader();
+    if (!reader) {
+      clearTimeout(timeout);
+      return {ok: false, status: res.status};
+    }
+    const decoder = new TextDecoder();
+    let sseBuf = '';
+    let acc = '';
+    let lastPushed = '';
+    const pushPartial = () => {
+      if (!onPartial) return;
+      const partial = extractPartialReply(acc);
+      if (partial && partial !== lastPushed) {
+        lastPushed = partial;
+        onPartial(partial);
+      }
+    };
+    for (;;) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      sseBuf += decoder.decode(value, {stream: true});
+      let idx: number;
+      while ((idx = sseBuf.indexOf('\n\n')) >= 0) {
+        const event = sseBuf.slice(0, idx);
+        sseBuf = sseBuf.slice(idx + 2);
+        for (const line of event.split('\n')) {
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (!payload || payload === '[DONE]') continue;
+          try {
+            const chunk = JSON.parse(payload) as {
+              candidates?: Array<{content?: {parts?: Array<{text?: string}>}}>;
+            };
+            const t = (chunk.candidates?.[0]?.content?.parts ?? [])
+              .map((pp) => pp.text ?? '')
+              .join('');
+            if (t) {
+              acc += t;
+              pushPartial();
+            }
+          } catch {
+            // Incomplete JSON event line: ignore, next event completes it.
+          }
+        }
+      }
+    }
     clearTimeout(timeout);
-    if (!res.ok) return {ok: false, status: res.status};
-    const data = (await res.json().catch(() => null)) as {
-      candidates?: Array<{content?: {parts?: Array<{text?: string}>}}>;
-    } | null;
-    const text = (data?.candidates?.[0]?.content?.parts ?? [])
-      .map((p) => p.text ?? '')
-      .join('')
-      .trim();
+    const text = acc.trim();
     return {ok: true, status: res.status, text};
   } catch (err) {
     clearTimeout(timeout);
@@ -295,11 +378,12 @@ async function callModel(
 
 export async function chatWithAssistantClientSide(
   req: AssistantChatRequest,
+  onPartial?: (text: string) => void,
 ): Promise<AssistantChatResult> {
   let lastStatus = 0;
   for (const model of MODEL_CHAIN) {
     try {
-      const out = await callModel(model, req);
+      const out = await callModel(model, req, onPartial);
       if (!out.ok) {
         lastStatus = out.status;
         // Retryable/unavailable statuses → try next model in the chain.

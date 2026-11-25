@@ -27,6 +27,7 @@ import {
 import {FocusTimerWidget} from './components/FocusTimerWidget';
 import {OfflineIndicator, PWAInstallButton} from './components/PWAInstallButton';
 import {PinLockScreen} from './components/PinLockScreen';
+import DailyQuoteCard from './components/DailyQuoteCard';
 import {DriveSyncProvider, useDriveSync} from './context/DriveSyncContext';
 import {LifeProvider, useLife} from './context/LifeContext';
 import {
@@ -438,31 +439,56 @@ const Shell: React.FC = () => {
         {/* Main Content Column */}
         <div className="flex min-w-0 flex-1 flex-col">
           {/* Mobile & Tablet Top Header */}
-          <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-2 border-b border-slate-200/80 bg-white px-3 dark:border-slate-800 dark:bg-slate-800 lg:hidden">
-            <button
-              type="button"
-              onClick={() => setActiveSection('home')}
-              dir="ltr"
-              className="font-brand min-w-0 truncate text-base font-bold tracking-tight text-slate-900 dark:text-slate-100"
-            >
-              Omar&apos;s Life
-            </button>
+          <header className="sticky top-0 z-30 flex h-14 items-center border-b border-slate-200/80 bg-white px-3 dark:border-slate-800 dark:bg-slate-800 lg:hidden">
+            <div className="relative flex w-full items-center justify-center">
+              <button
+                type="button"
+                onClick={() => setActiveSection('home')}
+                dir="ltr"
+                className="font-brand truncate text-base font-bold tracking-tight text-slate-900 dark:text-slate-100"
+              >
+                Omar&apos;s Life
+              </button>
 
-            <div className="flex shrink-0 items-center gap-1.5">
-              {hasPinLock && (
+              <div className="absolute end-0 flex items-center gap-1.5">
                 <button
                   type="button"
-                  onClick={lockApp}
-                  aria-label="قفل التطبيق"
-                  className="inline-flex min-h-[38px] items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-2.5 text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                  onClick={() => setRemindersPanelOpen((v) => !v)}
+                  aria-label="تنبيهات اليوم"
+                  className={`relative inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border px-2.5 text-xs font-medium ${
+                    activeReminders.length > 0
+                      ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300'
+                      : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
+                  }`}
                 >
-                  <Lock className="h-3.5 w-3.5" />
+                  {activeReminders.length > 0 ? (
+                    <BellRing className="h-3.5 w-3.5" />
+                  ) : (
+                    <Bell className="h-3.5 w-3.5" />
+                  )}
+                  {activeReminders.length > 0 && (
+                    <span className="font-mono text-xs font-bold tabular-nums">
+                      {activeReminders.length}
+                    </span>
+                  )}
                 </button>
-              )}
+
+                {hasPinLock && (
+                  <button
+                    type="button"
+                    onClick={lockApp}
+                    aria-label="قفل التطبيق"
+                    className="inline-flex min-h-[38px] items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-2.5 text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                  >
+                    <Lock className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
             </div>
           </header>
 
           <main className="mx-auto w-full max-w-5xl flex-1 space-y-5 p-4 pb-24 sm:p-6 lg:pb-8">
+            <DailyQuoteCard />
             {/* Due-Today Reminders In-App Notification Banner */}
             {activeReminders.length > 0 && !bannerDismissed && (
               <div

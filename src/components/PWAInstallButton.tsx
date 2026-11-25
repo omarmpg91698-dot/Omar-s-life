@@ -79,7 +79,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({variant, onIn
           className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-accent/30 bg-accent-soft px-2.5 text-xs font-semibold text-accent transition-colors hover:bg-accent hover:text-white"
         >
           <Download className="h-3.5 w-3.5 shrink-0" />
-          <span className="whitespace-nowrap">تثبيت</span>
+          <span className="hidden whitespace-nowrap sm:inline">تثبيت</span>
         </button>
       )}
 
